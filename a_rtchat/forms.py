@@ -1,0 +1,72 @@
+from django.forms import ModelForm
+from django import forms
+from django.core.exceptions import ValidationError
+from .models import *
+
+class ChatmessageCreateForm(ModelForm):
+    class Meta:
+        model = GroupMessage
+        fields = ['body']
+        widgets = {
+            'body': forms.TextInput(attrs={
+                'placeholder': 'Add message ...',
+                'class': 'w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-4 py-3 outline-none focus:border-emerald-500 placeholder:text-gray-400',
+                'maxlength': '300',
+                'autofocus': True,
+            }),
+        }
+
+    def clean_body(self):
+        body = (self.cleaned_data.get('body') or '').strip()
+        if not body:
+            raise ValidationError('Message cannot be empty')
+        return body
+        
+        
+class NewGroupForm(ModelForm):
+    class Meta:
+        model = ChatGroup
+        fields = ['groupchat_name']
+        widgets = {
+            'groupchat_name' : forms.TextInput(attrs={
+                'placeholder': 'Add name ...', 
+                'class': 'w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-4 py-3 outline-none focus:border-emerald-500 placeholder:text-gray-400',
+                'maxlength' : '300', 
+                'autofocus': True,
+                }),
+        }
+        
+        
+class ChatRoomEditForm(ModelForm):
+    class Meta:
+        model = ChatGroup
+        fields = ['groupchat_name']
+        widgets = {
+            'groupchat_name' : forms.TextInput(attrs={
+                'class': 'w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-4 py-3 outline-none focus:border-emerald-500 text-xl font-bold mb-4',
+                'maxlength' : '300', 
+                }),
+        }
+
+
+class PrivateRoomCreateForm(forms.Form):
+    name = forms.CharField(
+        required=False,
+        max_length=128,
+        widget=forms.TextInput(attrs={
+            'placeholder': 'Private room name (optional)',
+            'class': 'w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 placeholder:text-gray-400',
+        }),
+    )
+
+
+class RoomCodeJoinForm(forms.Form):
+    code = forms.CharField(
+        required=True,
+        max_length=16,
+        widget=forms.TextInput(attrs={
+            'placeholder': 'Enter room code ...',
+            'class': 'w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 placeholder:text-gray-400',
+            'autocomplete': 'off',
+        }),
+    )

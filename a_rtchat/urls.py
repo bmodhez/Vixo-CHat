@@ -1,0 +1,22 @@
+from django.urls import path
+from .views import *
+
+urlpatterns = [
+    path('', chat_view, name="home"),
+    path('chat/<username>', get_or_create_chatroom, name="start-chat"),
+    path('chat/room/<chatroom_name>', chat_view, name="chatroom"),
+    path('chat/poll/<chatroom_name>', chat_poll_view, name="chat-poll"),
+    path('chat/new_groupchat/', create_groupchat, name="new-groupchat"),
+    path('chat/private/create/', create_private_room, name='private-room-create'),
+    path('chat/private/join/', join_private_room_by_code, name='private-room-join'),
+    path('chat/edit/<chatroom_name>', chatroom_edit_view, name="edit-chatroom"),
+    path('chat/delete/<chatroom_name>', chatroom_delete_view, name="chatroom-delete"),
+    path('chat/close/<chatroom_name>', chatroom_close_view, name="chatroom-close"),
+    path('chat/leave/<chatroom_name>', chatroom_leave_view, name="chatroom-leave"),
+    path('chat/fileupload/<chatroom_name>', chat_file_upload, name="chat-file-upload"),
+    path('chat/call/<chatroom_name>', call_view, name='chat-call'),
+    path('chat/agora/token/<chatroom_name>', agora_token_view, name='agora-token'),
+    path('chat/call/invite/<chatroom_name>', call_invite_view, name='chat-call-invite'),
+    path('chat/call/presence/<chatroom_name>', call_presence_view, name='chat-call-presence'),
+    path('chat/call/event/<chatroom_name>', call_event_view, name='chat-call-event'),
+]

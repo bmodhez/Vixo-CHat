@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% load account %}
+
+{% block content %}
+<div class="min-h-[calc(100vh-7rem)] flex items-center justify-center py-10">
+  <div class="w-full max-w-md bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-6">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-emerald-400">{% trans "Sign in" %}</h1>
+        <p class="text-sm text-gray-300 mt-1">{% trans "Welcome back — start the New Year with a fresh chat." %}</p>
+      </div>
+      <div class="text-xs font-semibold text-gray-200 bg-gray-800 border border-gray-700 rounded-full px-3 py-1">
+        {% trans "New Year" %}
+      </div>
+    </div>
+
+    <form method="post" action="{% url 'account_login' %}" class="mt-6 space-y-4" novalidate>
+      {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <div class="text-sm text-red-300 bg-gray-900/40 border border-gray-800 rounded-xl px-4 py-3">
+          {{ form.non_field_errors }}
+        </div>
+      {% endif %}
+
+      <div class="space-y-1">
+        <label class="text-sm text-gray-200" for="{{ form.login.id_for_label }}">{% trans "Username or email" %}</label>
+        {{ form.login }}
+        {% if form.login.errors %}
+          <div class="text-xs text-red-400">{{ form.login.errors|first }}</div>
+        {% endif %}
+      </div>
+
+      <div class="space-y-1">
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-sm text-gray-200" for="{{ form.password.id_for_label }}">{% trans "Password" %}</label>
+          <a class="text-xs text-emerald-400 hover:text-emerald-300" href="{% url 'account_reset_password' %}">{% trans "Forgot password?" %}</a>
+        </div>
+        {{ form.password }}
+        {% if form.password.errors %}
+          <div class="text-xs text-red-400">{{ form.password.errors|first }}</div>
+        {% endif %}
+      </div>
+
+      {% if form.remember %}
+        <label class="flex items-center gap-2 text-sm text-gray-300">
+          {{ form.remember }}
+          <span>{% trans "Remember me" %}</span>
+        </label>
+      {% endif %}
+
+      {% if redirect_field_value %}
+        <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+      {% endif %}
+
+      <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl py-3 transition-colors">
+        {% trans "Sign in" %}
+      </button>
+
+      <p class="text-sm text-gray-300 text-center">
+        {% blocktrans %}New here? <a class="text-emerald-400 hover:text-emerald-300 font-semibold" href="{{ signup_url }}">Create an account</a>{% endblocktrans %}
+      </p>
+    </form>
+  </div>
+</div>
+{% endblock content %}

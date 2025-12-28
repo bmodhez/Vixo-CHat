@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block content %}
+<wrapper class="block max-w-3xl mx-auto my-10 px-6">
+    <div class="bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-6">
+        <div class="flex items-center justify-between gap-4 mb-6">
+            <div>
+                <h1 class="text-xl font-bold text-emerald-400">{% trans "Email addresses" %}</h1>
+                <p class="text-sm text-gray-400">{% trans "Manage emails linked to your account." %}</p>
+            </div>
+            <a href="{% url 'profile-settings' %}" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors">
+                {% trans "Back" %}
+            </a>
+        </div>
+
+        {% if messages %}
+            <div class="space-y-2 mb-6">
+                {% for message in messages %}
+                    <div class="bg-gray-900/40 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-200">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if emailaddresses %}
+            <div class="mb-8">
+                <div class="text-sm font-semibold text-gray-200 mb-3">{% trans "Your emails" %}</div>
+
+                <form method="post" action="{% url 'account_email' %}" class="space-y-4">
+                    {% csrf_token %}
+
+                    <div class="space-y-2">
+                        {% for radio in emailaddress_radios %}
+                            {% with emailaddress=radio.emailaddress %}
+                                <label class="flex items-center justify-between gap-4 bg-gray-900/40 border border-gray-700 rounded-xl px-4 py-3 hover:bg-gray-900/60 cursor-pointer">
+                                    <div class="flex items-center gap-3">
+                                        <input
+                                            type="radio"
+                                            name="email"
+                                            value="{{ emailaddress.email }}"
+                                            id="{{ radio.id }}"
+                                            {% if radio.checked %}checked{% endif %}
+                                            class="accent-emerald-500"
+                                        />
+                                        <div>
+                                            <div class="text-sm text-gray-100">{{ emailaddress.email }}</div>
+                                            <div class="text-xs text-gray-400 mt-1">
+                                                {% if emailaddress.verified %}
+                                                    <span class="text-emerald-400 font-semibold">{% trans "Verified" %}</span>
+                                                {% else %}
+                                                    <span class="text-amber-400 font-semibold">{% trans "Unverified" %}</span>
+                                                {% endif %}
+                                                {% if emailaddress.primary %}
+                                                    <span class="text-gray-300"> • {% trans "Primary" %}</span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </label>
+                            {% endwith %}
+                        {% endfor %}
+                    </div>
+
+                    <div class="flex flex-wrap gap-3 pt-2">
+                        <button type="submit" name="action_primary" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors">
+                            {% trans "Make primary" %}
+                        </button>
+                        <button type="submit" name="action_send" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors">
+                            {% trans "Re-send verification" %}
+                        </button>
+                        <button type="submit" name="action_remove" data-confirm="{% trans "Remove the selected email address?" %}" data-confirm-title="Remove email" class="bg-red-600 hover:bg-red-700 text-white rounded-lg px-4 py-2 transition-colors">
+                            {% trans "Remove" %}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        {% else %}
+            <div class="bg-gray-900/40 border border-gray-700 rounded-xl p-4 text-sm text-gray-200 mb-8">
+                {% trans "No email addresses are associated with your account yet." %}
+            </div>
+        {% endif %}
+
+        {% if can_add_email %}
+            <div class="border-t border-gray-700 pt-6">
+                <h2 class="text-sm font-semibold text-gray-200 mb-3">{% trans "Add email address" %}</h2>
+
+                <form method="post" action="{% url 'account_email' %}" class="space-y-3">
+                    {% csrf_token %}
+
+                    <div class="flex flex-col gap-1">
+                        <label class="text-sm text-gray-300" for="id_email">{% trans "Email" %}</label>
+                        {{ form.email }}
+                        {% if form.email.errors %}
+                            <div class="text-xs text-red-400">{{ form.email.errors|first }}</div>
+                        {% endif %}
+                    </div>
+
+                    <button type="submit" name="action_add" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors">
+                        {% trans "Add email" %}
+                    </button>
+                </form>
+            </div>
+        {% endif %}
+
+        <style>
+            /* base.html doesn't define extra_body, so keep styles inline here */
+            #id_email {
+                width: 100%;
+                background-color: #374151; /* gray-700 */
+                color: #ffffff;
+                border: 1px solid #4b5563; /* gray-600 */
+                border-radius: 0.5rem;
+                padding: 0.75rem 1rem;
+                outline: none;
+            }
+            #id_email::placeholder {
+                color: #9ca3af; /* gray-400 */
+            }
+            #id_email:focus {
+                border-color: #10b981; /* emerald-500 */
+            }
+        </style>
+        <script>
+            (function () {
+                const el = document.getElementById('id_email');
+                if (el && !el.getAttribute('placeholder')) {
+                    el.setAttribute('placeholder', 'you@example.com');
+                }
+            })();
+        </script>
+    </div>
+</wrapper>
+{% endblock %}

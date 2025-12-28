@@ -1,0 +1,435 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <div class="bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+            <div>
+                <div class="text-sm text-gray-300">{% if call_type == 'video' %}Video call{% else %}Voice call{% endif %}</div>
+                <div class="text-xs text-gray-500">Room: {{ chatroom_name }}</div>
+            </div>
+            <a href="{% url 'chatroom' chatroom_name %}" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
+                End / Back
+            </a>
+        </div>
+
+        <div class="p-5">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <div id="call-phase" class="text-sm text-gray-200">Calling…</div>
+                    <div class="text-xs text-gray-500 mt-1">Participants: <span id="participants-count">1</span></div>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-gray-500">In call</div>
+                    <div id="participants-names" class="text-xs text-gray-300 mt-1">You</div>
+                </div>
+            </div>
+
+            {% if call_type == 'video' %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
+                        <div class="text-xs text-gray-400 mb-2">You</div>
+                        <div id="local-player" class="w-full aspect-video bg-black/40 rounded-lg"></div>
+                    </div>
+                    <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-3">
+                        <div class="text-xs text-gray-400 mb-2">Other</div>
+                        <div id="remote-player" class="w-full aspect-video bg-black/40 rounded-lg"></div>
+                    </div>
+                </div>
+            {% else %}
+                <div class="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
+                    <div class="text-sm text-gray-200">Call connected…</div>
+                    <div class="text-xs text-gray-500 mt-1">Keep this tab open.</div>
+                </div>
+            {% endif %}
+
+            <div id="call-status" class="mt-4 text-xs text-gray-400"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
+<script>
+(function () {
+    const callType = "{{ call_type|escapejs }}";
+    const channel = "{{ chatroom_name|escapejs }}";
+    const callRole = "{{ call_role|escapejs }}";
+    const tokenUrl = "{% url 'agora-token' chatroom_name %}";
+    const presenceUrl = "{% url 'chat-call-presence' chatroom_name %}";
+    const callEventUrl = "{% url 'chat-call-event' chatroom_name %}";
+    const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${wsScheme}://${window.location.host}/ws/chatroom/${channel}`;
+    const memberUsernames = {{ member_usernames|safe }};
+
+    const phaseEl = document.getElementById('call-phase');
+    const countEl = document.getElementById('participants-count');
+    const namesEl = document.getElementById('participants-names');
+
+    const statusEl = document.getElementById('call-status');
+    const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+    const setPhase = (t) => { if (phaseEl) phaseEl.textContent = t; };
+
+    const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+
+    let localTracks = { audio: null, video: null };
+
+    // Remote audio can be blocked by autoplay policies; keep references to retry on user gesture.
+    const remoteAudioTracks = new Map(); // uid -> audioTrack
+    let audioPlaybackBlocked = false;
+
+    function tryPlayAllRemoteAudio() {
+        let playedAny = false;
+        for (const track of remoteAudioTracks.values()) {
+            if (!track) continue;
+            try {
+                track.play();
+                playedAny = true;
+            } catch {
+                // still blocked
+            }
+        }
+        if (playedAny) {
+            audioPlaybackBlocked = false;
+            setStatus('Connected (audio playing)');
+        }
+    }
+
+    // uid -> username (UI only)
+    const participants = new Map();
+    participants.set('me', 'You');
+
+    function renderParticipants() {
+        const names = Array.from(participants.values()).filter(Boolean);
+        const unique = Array.from(new Set(names));
+        if (countEl) countEl.textContent = String(Math.max(1, unique.length));
+        if (namesEl) namesEl.textContent = unique.length ? unique.join(', ') : 'You';
+    }
+    renderParticipants();
+
+    function getCsrf() {
+        try { return (typeof getCookie === 'function' ? getCookie('csrftoken') : ''); } catch { return ''; }
+    }
+
+    async function postCallEvent(action) {
+        try {
+            const body = new URLSearchParams();
+            body.set('action', action);
+            body.set('type', callType);
+            await fetch(callEventUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': getCsrf(),
+                },
+                body,
+            });
+        } catch {
+            // ignore
+        }
+    }
+
+    async function announcePresence(action, uid) {
+        try {
+            const body = new URLSearchParams();
+            body.set('action', action);
+            body.set('type', callType);
+            body.set('uid', String(uid || 0));
+            await fetch(presenceUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': getCsrf(),
+                },
+                body,
+            });
+        } catch {
+            // ignore
+        }
+    }
+
+    // Presence websocket: receive {username, uid} join/leave
+    let presenceWs = null;
+    let remoteEnded = false;
+    let endSent = false;
+
+    // -------- Ringtone (outgoing) --------
+    let audioCtx = null;
+    let ringTimer = null;
+    let ringWanted = false;
+
+    function ensureAudioContext() {
+        try {
+            audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+            return audioCtx;
+        } catch {
+            return null;
+        }
+    }
+
+    function stopOutgoingRing() {
+        ringWanted = false;
+        if (ringTimer) {
+            clearInterval(ringTimer);
+            ringTimer = null;
+        }
+    }
+
+    function playOutgoingRing() {
+        // Only for caller while waiting
+        if (callRole !== 'caller') return;
+        ringWanted = true;
+
+        const ctx = ensureAudioContext();
+        if (!ctx) return;
+
+        const ringOnce = () => {
+            try {
+                const ctx = audioCtx;
+                const now = ctx.currentTime;
+                const g = ctx.createGain();
+                g.gain.setValueAtTime(0.0001, now);
+                g.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, now + 1.1);
+                g.connect(ctx.destination);
+
+                const o = ctx.createOscillator();
+                o.type = 'sine';
+                o.frequency.setValueAtTime(440, now);
+                o.connect(g);
+                o.start(now);
+                o.stop(now + 1.2);
+            } catch {
+                // ignore
+            }
+        };
+
+        const startLoop = () => {
+            if (!ringWanted) return;
+            if (ringTimer) return;
+            ringOnce();
+            ringTimer = setInterval(ringOnce, 2500);
+        };
+
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(startLoop).catch(() => {});
+            return;
+        }
+        startLoop();
+    }
+
+    // Autoplay policies: if audio is blocked, retry on first user gesture.
+    document.addEventListener('pointerdown', function () {
+        if (!ringWanted) return;
+        playOutgoingRing();
+    }, { passive: true });
+
+    // Retry remote audio on any user gesture (Chrome/Safari autoplay policy).
+    document.addEventListener('pointerdown', function () {
+        if (!audioPlaybackBlocked) return;
+        tryPlayAllRemoteAudio();
+    }, { passive: true });
+
+    async function hangupAndExit(reason) {
+        if (remoteEnded) return;
+        remoteEnded = true;
+        endSent = true;
+        stopOutgoingRing();
+        setPhase('Call ended');
+        if (reason) setStatus(reason);
+
+        try {
+            if (localTracks.video) {
+                try { localTracks.video.stop(); } catch {}
+                try { localTracks.video.close(); } catch {}
+            }
+            if (localTracks.audio) {
+                try { localTracks.audio.stop(); } catch {}
+                try { localTracks.audio.close(); } catch {}
+            }
+        } catch {}
+
+        try { await client.leave(); } catch {}
+        try { if (presenceWs) presenceWs.close(); } catch {}
+
+        window.location.href = "{% url 'chatroom' chatroom_name %}";
+    }
+
+    function connectPresenceWs() {
+        try {
+            presenceWs = new WebSocket(wsUrl);
+            presenceWs.onmessage = (event) => {
+                let payload;
+                try { payload = JSON.parse(event.data); } catch { return; }
+
+                if (payload.type === 'call_presence') {
+                    const action = payload.action || 'join';
+                    const uid = payload.uid;
+                    const username = payload.username || '';
+                    if (!uid || !username) return;
+                    if (action === 'leave') {
+                        participants.delete(String(uid));
+                    } else {
+                        participants.set(String(uid), username);
+                    }
+                    renderParticipants();
+                    if (participants.size > 1) {
+                        setPhase('In call');
+                        stopOutgoingRing();
+                    }
+                    return;
+                }
+
+                if (payload.type === 'call_control' && payload.action === 'end') {
+                    const from = payload.from_username ? ` by ${payload.from_username}` : '';
+                    hangupAndExit(`Call ended${from}`);
+                }
+
+                if (payload.type === 'call_control' && payload.action === 'decline') {
+                    const from = payload.from_username ? ` by ${payload.from_username}` : '';
+                    hangupAndExit(`Call declined${from}`);
+                }
+            };
+        } catch {
+            // ignore
+        }
+    }
+
+    function ensureAppIdPresent(appId) {
+        if (!appId) {
+            setStatus('Agora is not configured (missing AGORA_APP_ID).');
+            return false;
+        }
+        return true;
+    }
+
+    async function fetchToken() {
+        const res = await fetch(tokenUrl, { credentials: 'same-origin' });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Token fetch failed');
+        return data;
+    }
+
+    async function join() {
+        try {
+            connectPresenceWs();
+            setPhase('Calling…');
+            setStatus('Connecting…');
+            const { token, uid, app_id } = await fetchToken();
+            if (!ensureAppIdPresent(app_id)) return;
+
+            // Start outgoing ring once user is on the call page.
+            playOutgoingRing();
+
+            client.on('user-published', async (user, mediaType) => {
+                await client.subscribe(user, mediaType);
+                if (mediaType === 'video') {
+                    const remoteContainer = document.getElementById('remote-player');
+                    if (remoteContainer) user.videoTrack.play(remoteContainer);
+                }
+                if (mediaType === 'audio') {
+                    try {
+                        remoteAudioTracks.set(String(user.uid), user.audioTrack);
+                        user.audioTrack.play();
+                    } catch {
+                        audioPlaybackBlocked = true;
+                        setStatus('Sound is blocked by browser. Tap anywhere to enable audio.');
+                    }
+                }
+            });
+
+            client.on('user-unpublished', () => {
+                // No special UI cleanup needed for this minimal page
+            });
+
+            client.on('user-left', (user) => {
+                try { remoteAudioTracks.delete(String(user.uid)); } catch { /* ignore */ }
+            });
+
+            client.on('user-joined', () => {
+                setPhase('In call');
+                stopOutgoingRing();
+            });
+
+            await client.join(app_id, channel, token, uid);
+
+            // Best-effort: show other member names for 1:1 rooms even before they join.
+            if (Array.isArray(memberUsernames) && memberUsernames.length) {
+                // Keep 'You' and let presence updates fill the rest.
+            }
+
+            await announcePresence('join', uid);
+
+            // Persist a chat marker that call started ONLY from caller.
+            if (callRole === 'caller') {
+                await postCallEvent('start');
+            }
+
+            // Local tracks
+            localTracks.audio = await AgoraRTC.createMicrophoneAudioTrack({
+                AEC: true,
+                AGC: true,
+                ANS: true,
+            });
+            try { await localTracks.audio.setEnabled(true); } catch { /* ignore */ }
+
+            if (callType === 'video') {
+                localTracks.video = await AgoraRTC.createCameraVideoTrack();
+                const localContainer = document.getElementById('local-player');
+                if (localContainer) localTracks.video.play(localContainer);
+                await client.publish([localTracks.audio, localTracks.video]);
+            } else {
+                await client.publish([localTracks.audio]);
+            }
+
+            setStatus('Connected (mic published)');
+
+            // If remote audio was blocked earlier, a tap will retry. If not blocked,
+            // this is a no-op.
+            tryPlayAllRemoteAudio();
+        } catch (e) {
+            setStatus('Error: ' + (e && e.message ? e.message : String(e)));
+        }
+    }
+
+    join();
+
+    // If user clicks End/Back button, try to send ended marker before leaving.
+    const endBtn = document.querySelector('a[href="{% url 'chatroom' chatroom_name %}"]');
+    if (endBtn) {
+        endBtn.addEventListener('click', function () {
+            if (endSent) return;
+            endSent = true;
+            stopOutgoingRing();
+            postCallEvent('end');
+        });
+    }
+
+    window.addEventListener('beforeunload', function () {
+        if (remoteEnded || endSent) return;
+        endSent = true;
+        try {
+            const uid = client && client.uid ? client.uid : 0;
+            const body = new URLSearchParams();
+            body.set('action', 'leave');
+            body.set('type', callType);
+            body.set('uid', String(uid || 0));
+            navigator.sendBeacon(presenceUrl, body);
+        } catch {
+            // ignore
+        }
+
+        try {
+            const body2 = new FormData();
+            body2.append('csrfmiddlewaretoken', getCsrf());
+            body2.append('action', 'end');
+            body2.append('type', callType);
+            navigator.sendBeacon(callEventUrl, body2);
+        } catch {
+            // ignore
+        }
+    });
+})();
+</script>
+{% endblock %}
