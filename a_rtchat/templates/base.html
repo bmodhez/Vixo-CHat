@@ -20,33 +20,33 @@
 </head>
 <body class="min-h-screen flex flex-col text-white antialiased bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950">
     <nav class="sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-800">
-        <div class="w-full max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-            <a href="/" class="text-xl font-extrabold tracking-wide text-emerald-400 hover:text-emerald-300 transition-colors">
+        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between gap-3">
+            <a href="/" class="text-lg sm:text-xl font-extrabold tracking-wide text-emerald-400 hover:text-emerald-300 transition-colors">
                 Vixogram
             </a>
 
             {% if user.is_authenticated %}
-                <div class="flex items-center gap-3">
-                    <a href="{% url 'home' %}" class="text-sm text-gray-300 hover:text-white transition-colors px-3 py-2 rounded-lg hover:bg-gray-800">
+                <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+                    <a href="{% url 'home' %}" class="text-xs sm:text-sm text-gray-300 hover:text-white transition-colors px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800">
                         Chat
                     </a>
-                    <a href="{% url 'profile' %}" class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">
-                        <img src="{{ user.profile.avatar }}" class="w-8 h-8 rounded-full object-cover border border-gray-700">
-                        <span class="text-sm text-gray-200 font-semibold">{{ user.username }}</span>
+                    <a href="{% url 'profile' %}" class="flex items-center gap-2 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">
+                        <img src="{{ user.profile.avatar }}" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover border border-gray-700">
+                        <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
                     </a>
                     <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
-                        <button type="submit" class="text-sm bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <button type="submit" class="text-xs sm:text-sm bg-gray-800 hover:bg-gray-700 text-white px-3 sm:px-4 py-2 rounded-lg transition-colors">
                             Logout
                         </button>
                     </form>
                 </div>
             {% else %}
-                <div class="flex items-center gap-3">
-                    <a href="{% url 'account_login' %}" class="text-sm text-gray-200 hover:text-white px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors">
+                <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+                    <a href="{% url 'account_login' %}" class="text-xs sm:text-sm text-gray-200 hover:text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors">
                         Login
                     </a>
-                    <a href="{% url 'account_signup' %}" class="text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg transition-colors">
+                    <a href="{% url 'account_signup' %}" class="text-xs sm:text-sm bg-emerald-500 hover:bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-lg transition-colors">
                         Sign up
                     </a>
                 </div>
@@ -82,7 +82,7 @@
         </div>
     {% endif %}
 
-    <main class="w-full max-w-7xl mx-auto px-6 py-6 flex-1">
+    <main class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex-1">
         {% block content %}
         {% endblock %}
     </main>
@@ -110,7 +110,7 @@
     </div>
 
     <footer class="w-full border-t border-gray-800 bg-gray-900/40 backdrop-blur">
-        <div class="w-full max-w-7xl mx-auto px-6 py-5 text-center">
+        <div class="w-full max-w-7xl mx-auto px-4 sm:px-6 py-5 text-center">
             <p class="text-sm text-gray-300 tracking-wide">
                 Made in <span class="text-emerald-400">❤</span> with
                 <span class="font-semibold text-gray-100">Bhavin</span>
@@ -247,6 +247,27 @@
                     else btn.click();
                 },
             });
+        }, true);
+    })();
+
+    (function initVideoDecodeFallback() {
+        // Media element errors do not bubble reliably; capture is required.
+        document.addEventListener('error', (e) => {
+            const el = e && e.target;
+            if (!el || el.tagName !== 'VIDEO') return;
+            const wrap = el.parentElement;
+            if (!wrap) return;
+            const fallback = wrap.querySelector('[data-video-fallback]');
+            if (fallback) fallback.classList.remove('hidden');
+        }, true);
+
+        document.addEventListener('loadeddata', (e) => {
+            const el = e && e.target;
+            if (!el || el.tagName !== 'VIDEO') return;
+            const wrap = el.parentElement;
+            if (!wrap) return;
+            const fallback = wrap.querySelector('[data-video-fallback]');
+            if (fallback) fallback.classList.add('hidden');
         }, true);
     })();
 

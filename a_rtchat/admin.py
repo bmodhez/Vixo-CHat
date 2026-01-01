@@ -23,7 +23,7 @@ class PrivateChatGroupAdmin(admin.ModelAdmin):
 
 @admin.register(GroupMessage)
 class GroupMessageAdmin(admin.ModelAdmin):
-	list_display = ('id', 'group', 'author', 'created', 'body', 'file')
+	list_display = ('id', 'group', 'author', 'created', 'body', 'file_caption', 'file')
 	list_filter = ('created',)
 	search_fields = ('body', 'author__username', 'group__group_name', 'group__room_code')
 

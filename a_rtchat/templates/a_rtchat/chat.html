@@ -2,9 +2,9 @@
 
 {% block content %}
 <wrapper class="block w-full">
-    <div class="flex gap-6">
+    <div class="flex flex-col lg:flex-row gap-4 lg:gap-6">
 
-        <aside class="w-72 shrink-0 h-[45rem] bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-4 overflow-y-auto">
+        <aside class="w-full lg:w-72 shrink-0 max-h-[40dvh] lg:max-h-none lg:h-[45rem] bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-4 overflow-y-auto">
             <div class="text-sm font-semibold text-gray-200 mb-3">Chats</div>
 
             {% if user.is_staff %}
@@ -106,7 +106,7 @@
             {% endif %}
         </aside>
 
-        <div id="chat_window" class="h-[45rem] flex flex-col bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl relative p-1 grow">
+        <div id="chat_window" class="h-[70dvh] sm:h-[75dvh] lg:h-[45rem] flex flex-col bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl relative p-1 grow">
         
         <div class="flex items-center justify-between text-emerald-400 bg-gray-900/60 p-2 sticky top-0 z-10 border-b border-gray-800 rounded-t-2xl">
             <div class="flex items-center">
@@ -204,49 +204,120 @@
                     You are on cooldown for <span class="font-semibold text-emerald-400">{{ chat_muted_seconds }}s</span>. Please wait.
                 </div>
             {% else %}
-                <form id="chat_message_form" class="flex items-center gap-2"
+                <form id="chat_message_form" class="flex flex-col gap-2"
                     hx-post="{{ request.path }}"
                     hx-target="#chat_messages"
-                    hx-swap="none"
-                    hx-on:htmx:after-request="if(event.detail.successful){document.getElementById('id_body').value = ''; document.getElementById('reply_to_id').value=''; document.getElementById('reply_bar').classList.add('hidden'); scrollToBottom();}">
+                    hx-swap="beforeend"
+                    hx-encoding="multipart/form-data"
+                    hx-on:htmx:after-request="if(event.detail.successful){(document.getElementById('chat_file_input') && (document.getElementById('chat_file_input').value=''));(document.getElementById('chat_file_caption') && (document.getElementById('chat_file_caption').value=''));(document.getElementById('upload_feedback') && (document.getElementById('upload_feedback').innerHTML=''));(document.getElementById('id_body') && (document.getElementById('id_body').value=''));(document.getElementById('reply_to_id') && (document.getElementById('reply_to_id').value=''));(document.getElementById('reply_bar') && document.getElementById('reply_bar').classList.add('hidden'));(document.getElementById('chat_file_caption_wrap') && document.getElementById('chat_file_caption_wrap').classList.add('hidden'));(document.getElementById('chat_body_wrap') && document.getElementById('chat_body_wrap').classList.remove('hidden'));(window.__syncUploadMode && window.__syncUploadMode()); scrollToBottom();}"
+                    hx-on:chatFileUploaded="(document.getElementById('chat_file_input') && (document.getElementById('chat_file_input').value=''));(document.getElementById('chat_file_caption') && (document.getElementById('chat_file_caption').value=''));(document.getElementById('upload_feedback') && (document.getElementById('upload_feedback').innerHTML=''));(document.getElementById('id_body') && (document.getElementById('id_body').value=''));(document.getElementById('chat_file_caption_wrap') && document.getElementById('chat_file_caption_wrap').classList.add('hidden'));(document.getElementById('chat_body_wrap') && document.getElementById('chat_body_wrap').classList.remove('hidden'));(window.__syncUploadMode && window.__syncUploadMode());">
                     {% csrf_token %}
 
                     <input type="hidden" name="reply_to_id" id="reply_to_id" value="" />
                     <input type="hidden" name="typed_ms" id="typed_ms" value="" />
 
-                    {{ form.body }} <button id="chat_send_btn" type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors">
-                        Send
-                    </button>
-                </form>
-            {% endif %}
+                    <div class="flex items-center gap-2">
+                        <div id="chat_body_wrap" class="grow">
+                            <div class="relative flex items-center gap-2">
+                                {{ form.body }}
 
-            {% if chat_group.is_private and chat_group.is_code_room %}
-                <div class="mt-3">
-                    <form id="chat_file_form"
-                          class="flex items-center gap-2"
-                          hx-post="{% url 'chat-file-upload' chatroom_name %}"
-                          hx-target="#upload_feedback"
-                          hx-swap="innerHTML"
-                          hx-encoding="multipart/form-data"
-                          hx-on:chatFileUploaded="document.getElementById('chat_file_input').value='';"
-                          hx-on:htmx:after-request="if(event.detail.successful){document.getElementById('chat_file_input').value='';}">
-                        {% csrf_token %}
+                                <button
+                                    type="button"
+                                    id="emoji_btn"
+                                    class="shrink-0 h-11 w-11 inline-flex items-center justify-center rounded-lg border border-gray-700 bg-gray-800/70 text-white hover:bg-gray-800 focus:outline-none focus:border-emerald-500"
+                                    aria-label="Insert emoji"
+                                    aria-haspopup="dialog"
+                                    aria-expanded="false"
+                                >
+                                    😊
+                                </button>
 
-                        <input id="chat_file_input" name="file" type="file" accept="image/*,video/*"
-                               class="block w-full text-sm text-gray-300 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700"
-                               {% if uploads_remaining == 0 %}disabled{% endif %} />
+                                <div
+                                    id="emoji_panel"
+                                    class="hidden absolute bottom-full right-0 mb-2 w-[min(20rem,calc(100vw-3rem))] rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/30 p-3 z-30"
+                                    role="dialog"
+                                    aria-label="Emoji picker"
+                                >
+                                    <div class="grid grid-cols-8 gap-2 text-lg">
+                                        <button type="button" class="emoji-item" data-emoji="😀">😀</button>
+                                        <button type="button" class="emoji-item" data-emoji="😃">😃</button>
+                                        <button type="button" class="emoji-item" data-emoji="😄">😄</button>
+                                        <button type="button" class="emoji-item" data-emoji="😁">😁</button>
+                                        <button type="button" class="emoji-item" data-emoji="😆">😆</button>
+                                        <button type="button" class="emoji-item" data-emoji="😅">😅</button>
+                                        <button type="button" class="emoji-item" data-emoji="😂">😂</button>
+                                        <button type="button" class="emoji-item" data-emoji="🤣">🤣</button>
 
-                        <button type="submit"
-                                class="bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-4 py-2 transition-colors text-sm"
-                                {% if uploads_remaining == 0 %}disabled{% endif %}>
-                            Upload{% if upload_limit %} ({{ uploads_used }}/{{ upload_limit }} used){% endif %}
+                                        <button type="button" class="emoji-item" data-emoji="🙂">🙂</button>
+                                        <button type="button" class="emoji-item" data-emoji="😉">😉</button>
+                                        <button type="button" class="emoji-item" data-emoji="😊">😊</button>
+                                        <button type="button" class="emoji-item" data-emoji="😍">😍</button>
+                                        <button type="button" class="emoji-item" data-emoji="😘">😘</button>
+                                        <button type="button" class="emoji-item" data-emoji="😋">😋</button>
+                                        <button type="button" class="emoji-item" data-emoji="😎">😎</button>
+                                        <button type="button" class="emoji-item" data-emoji="🤩">🤩</button>
+
+                                        <button type="button" class="emoji-item" data-emoji="😴">😴</button>
+                                        <button type="button" class="emoji-item" data-emoji="🤒">🤒</button>
+                                        <button type="button" class="emoji-item" data-emoji="🤯">🤯</button>
+                                        <button type="button" class="emoji-item" data-emoji="😡">😡</button>
+                                        <button type="button" class="emoji-item" data-emoji="🤬">🤬</button>
+                                        <button type="button" class="emoji-item" data-emoji="😭">😭</button>
+                                        <button type="button" class="emoji-item" data-emoji="🥺">🥺</button>
+                                        <button type="button" class="emoji-item" data-emoji="🙏">🙏</button>
+
+                                        <button type="button" class="emoji-item" data-emoji="👍">👍</button>
+                                        <button type="button" class="emoji-item" data-emoji="👎">👎</button>
+                                        <button type="button" class="emoji-item" data-emoji="👏">👏</button>
+                                        <button type="button" class="emoji-item" data-emoji="🔥">🔥</button>
+                                        <button type="button" class="emoji-item" data-emoji="✨">✨</button>
+                                        <button type="button" class="emoji-item" data-emoji="💯">💯</button>
+                                        <button type="button" class="emoji-item" data-emoji="❤️">❤️</button>
+                                        <button type="button" class="emoji-item" data-emoji="💔">💔</button>
+
+                                        <button type="button" class="emoji-item" data-emoji="🎉">🎉</button>
+                                        <button type="button" class="emoji-item" data-emoji="🎂">🎂</button>
+                                        <button type="button" class="emoji-item" data-emoji="🎁">🎁</button>
+                                        <button type="button" class="emoji-item" data-emoji="📌">📌</button>
+                                        <button type="button" class="emoji-item" data-emoji="📎">📎</button>
+                                        <button type="button" class="emoji-item" data-emoji="✅">✅</button>
+                                        <button type="button" class="emoji-item" data-emoji="❌">❌</button>
+                                        <button type="button" class="emoji-item" data-emoji="⚡">⚡</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="chat_file_caption_wrap" class="hidden grow">
+                            <input id="chat_file_caption" name="caption" type="text" maxlength="300"
+                                   placeholder="Add a caption (optional)…"
+                                   class="w-full bg-gray-800/70 text-white border border-gray-700 rounded-lg px-4 py-3 outline-none focus:border-emerald-500 placeholder:text-gray-400" />
+                        </div>
+                        <button id="chat_send_btn" type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors">
+                            Send
                         </button>
-                    </form>
-                    <div id="upload_feedback" class="mt-2"></div>
-                    {% if uploads_remaining == 0 %}
-                        <div class="text-xs text-gray-400 mt-1">Upload limit reached for this room.</div>
+                    </div>
+
+                    {% if chat_group.is_private and chat_group.is_code_room %}
+                        <div class="mt-1">
+                            <div class="flex items-center gap-2">
+                                <input id="chat_file_input" name="file" type="file" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime"
+                                       class="block w-full text-sm text-gray-300 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700"
+                                       {% if uploads_remaining == 0 %}disabled{% endif %} />
+
+                                {% if upload_limit %}
+                                    <div class="shrink-0 text-xs text-gray-400">
+                                        Upload ({{ uploads_used }}/{{ upload_limit }} used)
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <div id="upload_feedback" class="mt-2"></div>
+                            {% if uploads_remaining == 0 %}
+                                <div class="text-xs text-gray-400 mt-1">Upload limit reached for this room.</div>
+                            {% endif %}
+                        </div>
                     {% endif %}
-                </div>
+                </form>
             {% endif %}
         </div>
         </div>
@@ -255,7 +326,7 @@
 </wrapper>
 
 <!-- Draggable call popup (WhatsApp-like) -->
-<div id="call_popup" class="hidden fixed bottom-6 right-6 z-50 w-80 h-80 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl overflow-hidden">
+<div id="call_popup" class="hidden fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 w-[min(20rem,calc(100vw-2rem))] h-[min(20rem,calc(100vw-2rem))] sm:w-80 sm:h-80 rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl overflow-hidden">
     <div id="call_popup_header" class="px-3 py-2 bg-gray-900/90 border-b border-gray-800 flex items-center justify-between cursor-move select-none">
         <div class="min-w-0">
             <div id="call_popup_title" class="text-xs font-semibold text-gray-100 truncate">Call</div>
@@ -286,6 +357,65 @@
         const inviteUrl = "{% url 'chat-call-invite' chatroom_name %}";
         const tokenUrl = "{% url 'agora-token' chatroom_name %}";
         const presenceUrl = "{% url 'chat-call-presence' chatroom_name %}";
+
+        (function initChatEmojiPicker() {
+            const btn = document.getElementById('emoji_btn');
+            const panel = document.getElementById('emoji_panel');
+            const input = document.getElementById('id_body');
+
+            if (!btn || !panel || !input) return;
+
+            const open = () => {
+                panel.classList.remove('hidden');
+                btn.setAttribute('aria-expanded', 'true');
+            };
+            const close = () => {
+                panel.classList.add('hidden');
+                btn.setAttribute('aria-expanded', 'false');
+            };
+            const toggle = () => {
+                if (panel.classList.contains('hidden')) open();
+                else close();
+            };
+
+            function insertAtCursor(text) {
+                const start = input.selectionStart ?? input.value.length;
+                const end = input.selectionEnd ?? input.value.length;
+                const before = input.value.slice(0, start);
+                const after = input.value.slice(end);
+                input.value = before + text + after;
+                const nextPos = start + text.length;
+                try {
+                    input.setSelectionRange(nextPos, nextPos);
+                } catch (e) {}
+                try { input.focus(); } catch (e) {}
+            }
+
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                toggle();
+            });
+
+            panel.addEventListener('click', (e) => {
+                const target = e.target && e.target.closest ? e.target.closest('[data-emoji]') : null;
+                if (!target) return;
+                const emoji = target.getAttribute('data-emoji') || '';
+                if (!emoji) return;
+                insertAtCursor(emoji);
+                close();
+            });
+
+            document.addEventListener('click', (e) => {
+                const t = e.target;
+                if (!t) return;
+                if (panel.contains(t) || btn.contains(t)) return;
+                close();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') close();
+            });
+        })();
 
         // If server rate-limits message sends (429), show a countdown on the Send button.
         let sendCooldownTimer = null;
@@ -320,6 +450,44 @@
             sendCooldownTimer = window.setInterval(tick, 1000);
         }
 
+        // When a file is selected, switch the main form to upload mode.
+        (function setupUploadModeSwitcher() {
+            const msgForm = document.getElementById('chat_message_form');
+            const fileInput = document.getElementById('chat_file_input');
+            const captionWrap = document.getElementById('chat_file_caption_wrap');
+            const captionInput = document.getElementById('chat_file_caption');
+            const bodyWrap = document.getElementById('chat_body_wrap');
+            const msgInput = (msgForm && msgForm.querySelector('[name="body"]')) || document.getElementById('id_body');
+
+            if (!msgForm || !fileInput) return;
+
+            function syncUploadMode() {
+                const hasFile = !!(fileInput.files && fileInput.files.length);
+                if (captionWrap) captionWrap.classList.toggle('hidden', !hasFile);
+                if (bodyWrap) bodyWrap.classList.toggle('hidden', hasFile);
+                if (!hasFile) {
+                    if (captionInput) captionInput.value = '';
+                    return;
+                }
+            }
+
+            window.__syncUploadMode = syncUploadMode;
+            fileInput.addEventListener('change', syncUploadMode);
+            syncUploadMode();
+
+            // If switching to upload mode and message box has text, move it into caption.
+            fileInput.addEventListener('change', () => {
+                const hasFile = !!(fileInput.files && fileInput.files.length);
+                if (!hasFile) return;
+                if (!captionInput) return;
+                const cap = (captionInput.value || '').trim();
+                const body = (msgInput && (msgInput.value || '').trim()) || '';
+                if (!cap && body) {
+                    captionInput.value = body.slice(0, 300);
+                }
+            });
+        })();
+
         document.body.addEventListener('htmx:afterRequest', (event) => {
             const form = document.getElementById('chat_message_form');
             if (!form) return;
@@ -327,10 +495,30 @@
 
             const xhr = event.detail.xhr;
             if (!xhr) return;
+
+            // HTMX doesn't swap content on 4xx/5xx by default.
+            // If we're in upload mode, show the response text in the upload feedback area.
+            const fileInput = document.getElementById('chat_file_input');
+            const inUploadMode = !!(fileInput && fileInput.files && fileInput.files.length);
+            if (inUploadMode && xhr.status >= 400) {
+                const feedback = document.getElementById('upload_feedback');
+                if (feedback && xhr.responseText) {
+                    feedback.innerHTML = xhr.responseText;
+                }
+            }
             if (xhr.status !== 429) return;
 
             const retryAfter = Number(xhr.getResponseHeader('Retry-After') || '10');
             startSendCooldown(Number.isFinite(retryAfter) ? retryAfter : 10);
+        });
+
+        // After a successful HTMX swap (used for file uploads), hydrate timestamps.
+        document.body.addEventListener('htmx:afterSwap', (event) => {
+            if (!messagesEl) return;
+            if (event.target !== messagesEl) return;
+            hydrateLocalTimes(messagesEl);
+            updateLastIdFromDom();
+            safeScrollToBottom();
         });
 
         const initialMuted = Number("{{ chat_muted_seconds|default:0 }}" || '0');
@@ -341,6 +529,7 @@
         const callEventUrl = "{% url 'chat-call-event' chatroom_name %}";
         const messageEditUrlTemplate = "{% url 'message-edit' 0 %}";
         const messageDeleteUrlTemplate = "{% url 'message-delete' 0 %}";
+        const messageReactUrlTemplate = "{% url 'message-react' 0 %}";
 
             // -------- Ringtone (incoming) --------
             let audioCtx = null;
@@ -686,6 +875,14 @@
                     return;
                 }
 
+                if (payload.type === 'reactions' && payload.message_id && payload.html) {
+                    const el = document.getElementById(`reactions-${payload.message_id}`);
+                    if (el) {
+                        el.outerHTML = payload.html;
+                    }
+                    return;
+                }
+
                 if (payload.type === 'online_count' && typeof payload.online_count !== 'undefined') {
                     if (onlineCountEl) onlineCountEl.textContent = payload.online_count;
                 }
@@ -719,6 +916,56 @@
             updateLastIdFromDom();
             hydrateLocalTimes(document);
             safeScrollToBottom();
+        });
+
+        // -------- Reactions (WhatsApp style click popup) --------
+        function closeAllReactionPickers() {
+            document.querySelectorAll('[data-reaction-picker]').forEach((el) => {
+                el.classList.add('hidden');
+            });
+        }
+
+        document.addEventListener('click', function (e) {
+            const toggleBtn = e.target.closest('[data-reaction-toggle]');
+            const emojiBtn = e.target.closest('[data-react-emoji]');
+
+            if (toggleBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                const messageId = toggleBtn.dataset.messageId;
+                if (!messageId) return;
+                const picker = document.querySelector(`[data-reaction-picker][data-message-id="${messageId}"]`);
+                if (!picker) return;
+                const willOpen = picker.classList.contains('hidden');
+                closeAllReactionPickers();
+                if (willOpen) picker.classList.remove('hidden');
+                return;
+            }
+
+            if (emojiBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                const messageId = emojiBtn.dataset.messageId;
+                const emoji = emojiBtn.dataset.emoji;
+                if (!messageId || !emoji) return;
+                closeAllReactionPickers();
+                const url = messageReactUrlTemplate.replace('/0/', `/${messageId}/`);
+                const params = new URLSearchParams();
+                params.set('emoji', emoji);
+                fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : ''),
+                    },
+                    body: params,
+                }).catch(() => {});
+                return;
+            }
+
+            // Outside click closes pickers
+            closeAllReactionPickers();
         });
 
         function closeAllMessageMenus(exceptMenu) {
@@ -911,8 +1158,26 @@
 
         async function fetchAgoraToken() {
             const res = await fetch(tokenUrl, { credentials: 'same-origin' });
-            const data = await res.json();
-            if (!res.ok || data.error) throw new Error(data.error || 'Token fetch failed');
+
+            // Handle rate limit cleanly.
+            if (res.status === 429) {
+                const retryAfter = Number(res.headers.get('Retry-After') || '10');
+                throw new Error(`Rate limited. Try again in ${Number.isFinite(retryAfter) ? retryAfter : 10}s.`);
+            }
+
+            let data = null;
+            try {
+                data = await res.json();
+            } catch {
+                // Some servers return HTML on errors; include a short hint.
+                const text = await res.text().catch(() => '');
+                const hint = (text || '').slice(0, 140).replace(/\s+/g, ' ').trim();
+                throw new Error(!res.ok ? `Token request failed (${res.status}). ${hint}` : 'Token response was not JSON.');
+            }
+
+            if (!res.ok || (data && data.error)) {
+                throw new Error((data && data.error) ? String(data.error) : `Token request failed (${res.status}).`);
+            }
             return data;
         }
 
@@ -1022,6 +1287,29 @@
                 setCallStatus('In call');
             } catch (e) {
                 setCallStatus('Error: ' + (e && e.message ? e.message : String(e)));
+
+                // Allow retry without refresh.
+                try {
+                    if (localTracks.video) {
+                        try { localTracks.video.stop(); } catch {}
+                        try { localTracks.video.close(); } catch {}
+                    }
+                    if (localTracks.audio) {
+                        try { localTracks.audio.stop(); } catch {}
+                        try { localTracks.audio.close(); } catch {}
+                    }
+                } catch {}
+                try {
+                    if (callClient) {
+                        try { await callClient.leave(); } catch {}
+                    }
+                } catch {}
+
+                callClient = null;
+                localTracks = { audio: null, video: null };
+                callActive = false;
+                callTypeActive = null;
+                callRoleActive = null;
             }
         }
 
@@ -1059,7 +1347,11 @@
         }
 
         if (callEndBtn) {
-            callEndBtn.addEventListener('click', () => endCallPopup('Call ended'));
+            callEndBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                endCallPopup('Call ended');
+            });
         }
 
         // Draggable popup
@@ -1069,9 +1361,24 @@
             let offsetX = 0;
             let offsetY = 0;
 
+            function stopDrag(e) {
+                if (!dragging) return;
+                dragging = false;
+                try {
+                    if (e && typeof e.pointerId !== 'undefined') {
+                        callPopupHeaderEl.releasePointerCapture(e.pointerId);
+                    }
+                } catch {}
+            }
+
             callPopupHeaderEl.addEventListener('pointerdown', (e) => {
+                // Don't start dragging when clicking the End button (or any interactive element).
+                const interactive = e.target && e.target.closest ? e.target.closest('button, a, input, select, textarea') : null;
+                if (interactive) return;
+                // Only left-click for mouse pointers.
+                if (typeof e.button === 'number' && e.button !== 0) return;
                 dragging = true;
-                callPopupEl.setPointerCapture(e.pointerId);
+                try { callPopupHeaderEl.setPointerCapture(e.pointerId); } catch {}
                 const rect = callPopupEl.getBoundingClientRect();
                 offsetX = e.clientX - rect.left;
                 offsetY = e.clientY - rect.top;
@@ -1088,14 +1395,16 @@
             });
 
             callPopupHeaderEl.addEventListener('pointerup', (e) => {
-                dragging = false;
-                try { callPopupEl.releasePointerCapture(e.pointerId); } catch {}
+                stopDrag(e);
             });
 
             callPopupHeaderEl.addEventListener('pointercancel', (e) => {
-                dragging = false;
-                try { callPopupEl.releasePointerCapture(e.pointerId); } catch {}
+                stopDrag(e);
             });
+
+            // Safety: if pointerup happens outside header, still stop dragging.
+            window.addEventListener('pointerup', stopDrag, true);
+            window.addEventListener('pointercancel', stopDrag, true);
         })();
 
         // When clicking call buttons, notify the other member first, then open popup.

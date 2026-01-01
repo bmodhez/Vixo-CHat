@@ -2,9 +2,36 @@ from channels.generic.websocket import WebsocketConsumer
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.contrib.auth import get_user_model
+from django.conf import settings
+from django.db.models import Count
 from asgiref.sync import async_to_sync
 import json
 from .models import *
+
+
+def _reaction_context_for(message, user):
+    emojis = getattr(settings, 'CHAT_REACTION_EMOJIS', ['👍', '❤️', '😂', '😮', '😢', '🙏'])
+
+    counts = {}
+    for row in (
+        MessageReaction.objects.filter(message=message, emoji__in=emojis)
+        .values('emoji')
+        .annotate(count=Count('id'))
+    ):
+        counts[row['emoji']] = int(row['count'] or 0)
+
+    reacted = set(
+        MessageReaction.objects.filter(message=message, user=user, emoji__in=emojis)
+        .values_list('emoji', flat=True)
+    )
+
+    pills = []
+    for emoji in emojis:
+        c = counts.get(emoji, 0)
+        if c:
+            pills.append({'emoji': emoji, 'count': c, 'reacted': emoji in reacted})
+    message.reaction_pills = pills
+    return emojis
 from django.conf import settings
 from .rate_limit import (
     check_rate_limit,
@@ -370,10 +397,12 @@ class ChatroomConsumer(WebsocketConsumer):
             return
         message_id = event['message_id']
         message = GroupMessage.objects.get(id=message_id)
+        reaction_emojis = _reaction_context_for(message, self.user)
         context = {
             'message': message,
             'user': self.user,
-            'chat_group': self.chatroom
+            'chat_group': self.chatroom,
+            'reaction_emojis': reaction_emojis,
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
@@ -389,14 +418,41 @@ class ChatroomConsumer(WebsocketConsumer):
         message = GroupMessage.objects.filter(id=message_id).first()
         if not message:
             return
+        reaction_emojis = _reaction_context_for(message, self.user)
         context = {
             'message': message,
             'user': self.user,
             'chat_group': self.chatroom,
+            'reaction_emojis': reaction_emojis,
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
             'type': 'message_update',
+            'message_id': message_id,
+            'html': html,
+        }))
+
+
+    def reactions_handler(self, event):
+        message_id = event.get('message_id')
+        if not message_id:
+            return
+        message = GroupMessage.objects.filter(id=message_id).first()
+        if not message:
+            return
+
+        reaction_emojis = _reaction_context_for(message, self.user)
+        html = render_to_string(
+            "a_rtchat/partials/reactions_bar.html",
+            context={
+                'message': message,
+                'user': self.user,
+                'chat_group': self.chatroom,
+                'reaction_emojis': reaction_emojis,
+            },
+        )
+        self.send(text_data=json.dumps({
+            'type': 'reactions',
             'message_id': message_id,
             'html': html,
         }))

@@ -10,13 +10,29 @@
             {% csrf_token %}
 
             {% for field in form %}
-                <div class="flex flex-col gap-1">
-                    <label class="text-sm font-semibold text-gray-300">{{ field.label }}</label>
-                    {{ field }}
-                    {% if field.errors %}
-                        <span class="text-red-500 text-xs">{{ field.errors|first }}</span>
-                    {% endif %}
-                </div>
+                {% if field.name == 'image' %}
+                    <div class="flex flex-col gap-2">
+                        <label class="text-sm font-semibold text-gray-300">Current avatar</label>
+                        <div class="flex items-center gap-3">
+                            <img src="{{ profile.avatar }}" alt="Current avatar" class="w-16 h-16 rounded-full object-cover border border-gray-700" />
+                            <div class="text-xs text-gray-400">Choose a new image to update your avatar.</div>
+                        </div>
+
+                        <label class="text-sm font-semibold text-gray-300 mt-2">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.errors %}
+                            <span class="text-red-500 text-xs">{{ field.errors|first }}</span>
+                        {% endif %}
+                    </div>
+                {% else %}
+                    <div class="flex flex-col gap-1">
+                        <label class="text-sm font-semibold text-gray-300">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.errors %}
+                            <span class="text-red-500 text-xs">{{ field.errors|first }}</span>
+                        {% endif %}
+                    </div>
+                {% endif %}
             {% endfor %}
 
             <div class="flex items-center gap-3 pt-4">

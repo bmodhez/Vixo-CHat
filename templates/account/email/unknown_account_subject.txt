@@ -1,1 +1,1 @@
-{% load i18n %}{% blocktrans %}Password reset request{% endblocktrans %}
+Not a member of Vixogram Connect yet?

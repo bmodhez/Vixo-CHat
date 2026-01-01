@@ -13,6 +13,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.urls import reverse
 from django.db.models import Q
+from django.db.models import Count
 from django.utils.http import url_has_allowed_host_and_scheme
 from a_users.models import Profile
 from .models import *
@@ -33,8 +34,39 @@ from .rate_limit import (
 )
 
 
-CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 20)
+CHAT_UPLOAD_LIMIT_PER_ROOM = getattr(settings, 'CHAT_UPLOAD_LIMIT_PER_ROOM', 5)
 CHAT_UPLOAD_MAX_BYTES = getattr(settings, 'CHAT_UPLOAD_MAX_BYTES', 10 * 1024 * 1024)
+CHAT_REACTION_EMOJIS = getattr(settings, 'CHAT_REACTION_EMOJIS', ['👍', '❤️', '😂', '😮', '😢', '🙏'])
+
+
+def _attach_reaction_pills(messages, user):
+    """Attach `reaction_pills` attribute to each message for template rendering."""
+    if not messages:
+        return
+    message_ids = [m.id for m in messages if getattr(m, 'id', None)]
+    if not message_ids:
+        return
+
+    counts = {}
+    for row in (
+        MessageReaction.objects.filter(message_id__in=message_ids, emoji__in=CHAT_REACTION_EMOJIS)
+        .values('message_id', 'emoji')
+        .annotate(count=Count('id'))
+    ):
+        counts[(row['message_id'], row['emoji'])] = int(row['count'] or 0)
+
+    reacted = set(
+        MessageReaction.objects.filter(message_id__in=message_ids, user=user, emoji__in=CHAT_REACTION_EMOJIS)
+        .values_list('message_id', 'emoji')
+    )
+
+    for m in messages:
+        pills = []
+        for emoji in CHAT_REACTION_EMOJIS:
+            c = counts.get((m.id, emoji), 0)
+            if c:
+                pills.append({'emoji': emoji, 'count': c, 'reacted': (m.id, emoji) in reacted})
+        m.reaction_pills = pills
 
 
 def _is_chat_blocked(user) -> bool:
@@ -69,6 +101,7 @@ def chat_view(request, chatroom_name='public-chat'):
     latest_messages = list(chat_group.chat_messages.order_by('-created')[:30])
     latest_messages.reverse()
     chat_messages = latest_messages
+    _attach_reaction_pills(chat_messages, request.user)
     form = ChatmessageCreateForm()
 
     chat_blocked = _is_chat_blocked(request.user)
@@ -124,6 +157,88 @@ def chat_view(request, chatroom_name='public-chat'):
         if chat_muted_seconds > 0:
             resp = HttpResponse('', status=429)
             resp.headers['Retry-After'] = str(chat_muted_seconds)
+            return resp
+
+        # File upload (optional caption) via the same Send button.
+        # The template shows the file picker only for private code rooms, but we enforce it here too.
+        if request.FILES and 'file' in request.FILES:
+            if not getattr(chat_group, 'is_private', False) or not getattr(chat_group, 'is_code_room', False):
+                raise Http404()
+            if request.user not in chat_group.members.all():
+                raise Http404()
+
+            rl = check_rate_limit(
+                make_key('chat_upload', chatroom_name, request.user.id),
+                limit=int(getattr(settings, 'CHAT_UPLOAD_RATE_LIMIT', 3)),
+                period_seconds=int(getattr(settings, 'CHAT_UPLOAD_RATE_PERIOD', 60)),
+            )
+            if not rl.allowed:
+                _, muted2 = record_abuse_violation(
+                    scope='chat_upload',
+                    user_id=request.user.id,
+                    room=chatroom_name,
+                    window_seconds=int(getattr(settings, 'CHAT_ABUSE_WINDOW', 600)),
+                    threshold=int(getattr(settings, 'CHAT_ABUSE_STRIKE_THRESHOLD', 5)),
+                    mute_seconds=int(getattr(settings, 'CHAT_ABUSE_MUTE_SECONDS', 60)),
+                )
+                resp = HttpResponse('<div class="text-xs text-red-400">Too many uploads. Please wait.</div>', status=429)
+                resp.headers['Retry-After'] = str(muted2 or rl.retry_after)
+                return resp
+
+            upload = request.FILES['file']
+            caption = (request.POST.get('caption') or '').strip()
+            if caption:
+                caption = caption[:300]
+
+            if getattr(upload, 'size', 0) > CHAT_UPLOAD_MAX_BYTES:
+                return HttpResponse('<div class="text-xs text-red-400">File is too large.</div>', status=413)
+
+            content_type = (getattr(upload, 'content_type', '') or '').lower()
+            if not (content_type.startswith('image/') or content_type.startswith('video/')):
+                return HttpResponse('<div class="text-xs text-red-400">Only photos/videos are allowed.</div>', status=400)
+
+            uploads_used = (
+                chat_group.chat_messages
+                .filter(author=request.user)
+                .exclude(file__isnull=True)
+                .exclude(file='')
+                .count()
+            )
+            if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
+                return HttpResponse(
+                    f'<div class="text-xs text-red-400">Upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
+                    status=400,
+                )
+
+            message = GroupMessage.objects.create(
+                file=upload,
+                file_caption=caption or None,
+                author=request.user,
+                group=chat_group,
+            )
+
+            # Broadcast to others; sender will render via HTMX response.
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                chatroom_channel_group_name(chat_group),
+                {
+                    'type': 'message_handler',
+                    'message_id': message.id,
+                    'skip_sender': True,
+                    'author_id': request.user.id,
+                },
+            )
+
+            _attach_reaction_pills([message], request.user)
+            html = render(request, 'a_rtchat/chat_message.html', {
+                'message': message,
+                'user': request.user,
+                'chat_group': chat_group,
+                'reaction_emojis': CHAT_REACTION_EMOJIS,
+            }).content.decode('utf-8')
+
+            resp = HttpResponse(html, status=200)
+            resp.headers['HX-Trigger-After-Swap'] = 'chatFileUploaded'
             return resp
 
         # Room-wide flood protection (applies to everyone in the room).
@@ -426,6 +541,7 @@ def chat_view(request, chatroom_name='public-chat'):
         'uploads_used': uploads_used,
         'uploads_remaining': uploads_remaining,
         'upload_limit': CHAT_UPLOAD_LIMIT_PER_ROOM,
+        'reaction_emojis': CHAT_REACTION_EMOJIS,
     }
     
     return render(request, 'a_rtchat/chat.html', context)
@@ -653,17 +769,21 @@ def chat_file_upload(request, chatroom_name):
         if is_htmx:
             return HttpResponse(
                 '<div class="text-xs text-red-400">Please choose a file first.</div>',
-                status=200,
+                status=400,
             )
         return redirect('chatroom', chatroom_name)
 
     upload = request.FILES['file']
 
+    caption = (request.POST.get('caption') or '').strip()
+    if caption:
+        caption = caption[:300]
+
     # Enforce max file size
     if getattr(upload, 'size', 0) > CHAT_UPLOAD_MAX_BYTES:
         return HttpResponse(
             '<div class="text-xs text-red-400">File is too large.</div>',
-            status=200,
+            status=413,
         )
 
     # Enforce content type: images/videos only
@@ -671,7 +791,7 @@ def chat_file_upload(request, chatroom_name):
     if not (content_type.startswith('image/') or content_type.startswith('video/')):
         return HttpResponse(
             '<div class="text-xs text-red-400">Only photos/videos are allowed.</div>',
-            status=200,
+            status=400,
         )
 
     # Enforce per-user per-room upload limit
@@ -685,11 +805,12 @@ def chat_file_upload(request, chatroom_name):
     if uploads_used >= CHAT_UPLOAD_LIMIT_PER_ROOM:
         return HttpResponse(
             f'<div class="text-xs text-red-400">Upload limit reached ({CHAT_UPLOAD_LIMIT_PER_ROOM}/{CHAT_UPLOAD_LIMIT_PER_ROOM}).</div>',
-            status=200,
+            status=400,
         )
 
     message = GroupMessage.objects.create(
         file=upload,
+        file_caption=caption or None,
         author=request.user,
         group=chat_group,
     )
@@ -698,14 +819,28 @@ def chat_file_upload(request, chatroom_name):
     event = {
         'type': 'message_handler',
         'message_id': message.id,
+        # Sender will render via HTMX response; avoid duplicate bubble via websocket.
+        'skip_sender': True,
+        'author_id': request.user.id,
     }
     async_to_sync(channel_layer.group_send)(chatroom_channel_group_name(chat_group), event)
 
-    # Clear any prior error text + let the client know it can clear the file input.
-    response = HttpResponse('', status=200)
+    # HTMX: return the rendered message HTML so the sender sees it immediately
+    # even if websockets are unavailable.
     if is_htmx:
-        response.headers['HX-Trigger'] = 'chatFileUploaded'
-    return response
+        _attach_reaction_pills([message], request.user)
+        html = render(request, 'a_rtchat/chat_message.html', {
+            'message': message,
+            'user': request.user,
+            'chat_group': chat_group,
+            'reaction_emojis': CHAT_REACTION_EMOJIS,
+        }).content.decode('utf-8')
+        response = HttpResponse(html, status=200)
+        # Fire after swap so client-side reset doesn't interfere with the DOM insertion.
+        response.headers['HX-Trigger-After-Swap'] = 'chatFileUploaded'
+        return response
+
+    return redirect('chatroom', chatroom_name)
 
 
 @login_required
@@ -769,10 +904,17 @@ def chat_poll_view(request, chatroom_name):
     if not new_messages:
         return JsonResponse({'messages_html': '', 'last_id': after_id, 'online_count': online_count})
 
+    _attach_reaction_pills(new_messages, request.user)
+
     # Render a batch of messages using the same bubble template
     parts = []
     for message in new_messages:
-        parts.append(render(request, 'a_rtchat/chat_message.html', {'message': message, 'user': request.user}).content.decode('utf-8'))
+        parts.append(render(request, 'a_rtchat/chat_message.html', {
+            'message': message,
+            'user': request.user,
+            'chat_group': chat_group,
+            'reaction_emojis': CHAT_REACTION_EMOJIS,
+        }).content.decode('utf-8'))
 
     last_id = new_messages[-1].id
     return JsonResponse({'messages_html': ''.join(parts), 'last_id': last_id, 'online_count': online_count})
@@ -870,6 +1012,46 @@ def message_delete_view(request, message_id: int):
             'message_id': deleted_id,
         },
     )
+    return HttpResponse('', status=204)
+
+
+@login_required
+def message_react_toggle(request, message_id: int):
+    if request.method != 'POST':
+        raise Http404()
+
+    if _is_chat_blocked(request.user):
+        return HttpResponse('', status=403)
+
+    emoji = (request.POST.get('emoji') or '').strip()
+    if emoji not in CHAT_REACTION_EMOJIS:
+        return JsonResponse({'error': 'Invalid emoji'}, status=400)
+
+    message = get_object_or_404(GroupMessage, pk=message_id)
+    chat_group = message.group
+
+    if getattr(chat_group, 'is_private', False) and request.user not in chat_group.members.all():
+        raise Http404()
+    if chat_group.groupchat_name and request.user not in chat_group.members.all():
+        raise Http404()
+
+    reaction, created = MessageReaction.objects.get_or_create(
+        message=message,
+        user=request.user,
+        emoji=emoji,
+    )
+    if not created:
+        reaction.delete()
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        chatroom_channel_group_name(chat_group),
+        {
+            'type': 'reactions_handler',
+            'message_id': message.id,
+        },
+    )
+
     return HttpResponse('', status=204)
 
 

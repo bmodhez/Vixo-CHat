@@ -21,6 +21,7 @@ urlpatterns = [
     path('chat/call/event/<chatroom_name>', call_event_view, name='chat-call-event'),
     path('chat/message/<int:message_id>/edit/', message_edit_view, name='message-edit'),
     path('chat/message/<int:message_id>/delete/', message_delete_view, name='message-delete'),
+    path('chat/message/<int:message_id>/react/', message_react_toggle, name='message-react'),
 
     # Staff tools
     path('chat/admin/users/', admin_users_view, name='admin-users'),

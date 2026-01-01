@@ -23,7 +23,7 @@
                 data-reply-button
                 data-reply-to-id="{{ message.id }}"
                 data-reply-author="{{ message.author.profile.name|default:message.author.username|escape }}"
-                data-reply-preview="{{ message.body|default:message.filename|default:''|escape }}">
+                data-reply-preview="{{ message.body|default:message.file_caption|default:message.filename|default:''|escape }}">
                 Reply
             </button>
 
@@ -70,31 +70,43 @@
             {% endif %}
         </div>
 
-        <div class="px-4 py-2.5 rounded-2xl shadow-sm 
+        <div class="flex items-end gap-2">
             {% if message.author == user %}
-                bg-indigo-600 text-white rounded-tr-none
-            {% else %}
-                bg-white text-gray-800 border border-gray-100 rounded-tl-none
-            {% endif %}">
-            {% if message.reply_to %}
-                <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-2">
-                    <div class="px-3 py-2 rounded-xl border-l-2 border-emerald-400/60
-                        {% if message.author == user %}bg-indigo-500/30{% else %}bg-gray-50{% endif %}">
-                        <div class="text-[10px] font-semibold {% if message.author == user %}text-indigo-100{% else %}text-gray-600{% endif %}">
-                            Replying to {{ message.reply_to.author.profile.name|default:message.reply_to.author.username }}
-                        </div>
-                        <div class="text-[11px] {% if message.author == user %}text-indigo-50/90{% else %}text-gray-700{% endif %} truncate">
-                            {% if message.reply_to.body %}
-                                {{ message.reply_to.body }}
-                            {% elif message.reply_to.file %}
-                                {{ message.reply_to.filename }}
-                            {% endif %}
-                        </div>
-                    </div>
-                </button>
+                {% include 'a_rtchat/partials/reaction_picker.html' %}
             {% endif %}
-            <div class="text-sm leading-relaxed">{% include 'a_rtchat/partials/message_content.html' %}</div>
+
+            <div class="px-4 py-2.5 rounded-2xl shadow-sm 
+                {% if message.author == user %}
+                    bg-indigo-600 text-white rounded-tr-none
+                {% else %}
+                    bg-white text-gray-800 border border-gray-100 rounded-tl-none
+                {% endif %}">
+                {% if message.reply_to %}
+                    <button type="button" data-scroll-to="msg-{{ message.reply_to.id }}" class="block w-full text-left mb-2">
+                        <div class="px-3 py-2 rounded-xl border-l-2 border-emerald-400/60
+                            {% if message.author == user %}bg-indigo-500/30{% else %}bg-gray-50{% endif %}">
+                            <div class="text-[10px] font-semibold {% if message.author == user %}text-indigo-100{% else %}text-gray-600{% endif %}">
+                                Replying to {{ message.reply_to.author.profile.name|default:message.reply_to.author.username }}
+                            </div>
+                            <div class="text-[11px] {% if message.author == user %}text-indigo-50/90{% else %}text-gray-700{% endif %} truncate">
+                                {% if message.reply_to.body %}
+                                    {{ message.reply_to.body }}
+                                {% elif message.reply_to.file %}
+                                    {{ message.reply_to.filename }}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </button>
+                {% endif %}
+                <div class="text-sm leading-relaxed">{% include 'a_rtchat/partials/message_content.html' %}</div>
+            </div>
+
+            {% if message.author != user %}
+                {% include 'a_rtchat/partials/reaction_picker.html' %}
+            {% endif %}
         </div>
+
+        {% include 'a_rtchat/partials/reactions_bar.html' %}
         
         <div class="mt-1 px-1 flex items-center gap-1">
             <time class="text-[9px] text-gray-400" data-dt="{{ message.created|date:'c' }}"></time>

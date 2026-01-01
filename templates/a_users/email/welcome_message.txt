@@ -1,0 +1,10 @@
+Hi {{ user.username }},
+
+Welcome to {{ site_name }}!
+
+You can log in and start chatting here:
+{{ login_url }}
+
+Cheers,
+
+Team Vixogram

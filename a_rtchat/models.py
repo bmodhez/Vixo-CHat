@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 import shortuuid
 from PIL import Image
 import os
+import mimetypes
 
 class ChatGroup(models.Model):
     group_name = models.CharField(max_length=128, unique=True, blank=True)
@@ -50,6 +51,7 @@ class GroupMessage(models.Model):
     author = models.ForeignKey(User, on_delete=models.CASCADE)
     body = models.CharField(max_length=300, blank=True, null=True)
     file = models.FileField(upload_to='files/', blank=True, null=True)
+    file_caption = models.CharField(max_length=300, blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
     edited_at = models.DateTimeField(null=True, blank=True)
     
@@ -79,6 +81,30 @@ class GroupMessage(models.Model):
         except:
             return False
 
+    @property
+    def is_video(self):
+        if not self.file:
+            return False
+        name = (getattr(self.file, 'name', '') or '').lower()
+        # Keep this to formats that are commonly playable in browsers.
+        # (e.g. .mkv/.avi often upload fine but usually don't play in HTML5 video.)
+        return name.endswith(('.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v'))
+
+    @property
+    def video_mime_type(self):
+        if not self.file:
+            return ''
+        name = (getattr(self.file, 'name', '') or '')
+        guessed, _ = mimetypes.guess_type(name)
+        if guessed:
+            return guessed
+        lower = name.lower()
+        if lower.endswith('.mov'):
+            return 'video/quicktime'
+        if lower.endswith('.m4v'):
+            return 'video/x-m4v'
+        return 'video/mp4'
+
 
 class ModerationEvent(models.Model):
     ACTION_CHOICES = (
@@ -105,4 +131,19 @@ class ModerationEvent(models.Model):
 
     def __str__(self):
         return f"{self.action} u={self.user_id} room={getattr(self.room, 'group_name', '')}"
+
+
+class MessageReaction(models.Model):
+    message = models.ForeignKey(GroupMessage, related_name='reactions', on_delete=models.CASCADE)
+    user = models.ForeignKey(User, related_name='message_reactions', on_delete=models.CASCADE)
+    emoji = models.CharField(max_length=8)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['message', 'user', 'emoji'], name='unique_message_reaction_v2'),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} reacted {self.emoji} to #{self.message_id}"
 

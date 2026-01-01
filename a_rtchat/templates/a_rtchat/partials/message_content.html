@@ -1,9 +1,23 @@
 {% if message.body %}
-    <span>{{ message.body }}</span>
+    <span class="break-words whitespace-pre-wrap">{{ message.body }}</span>
 {% elif message.file %}
     {% if message.is_image %}
-        <img class="max-w-72 min-w-8" src="{{ message.file.url }}" />
+        <img class="w-full sm:w-auto max-w-full sm:max-w-72 h-auto rounded-lg" src="{{ message.file.url }}" />
+    {% elif message.is_video %}
+        <div class="max-w-full sm:max-w-72">
+            <video class="w-full h-auto rounded-lg bg-black/20" controls playsinline preload="metadata">
+                <source src="{{ message.file.url }}" {% if message.video_mime_type %}type="{{ message.video_mime_type }}"{% endif %} />
+                Your browser can't play this video.
+            </video>
+            <div data-video-fallback class="hidden mt-2 text-xs text-gray-500">
+                Video format/codec not supported in this browser. Upload MP4 (H.264) or WEBM.
+            </div>
+        </div>
     {% else %}
         &#x1F4CE; <a class="cursor-pointer italic hover:underline" href="{{ message.file.url }}" download>{{ message.filename }}</a>
+    {% endif %}
+
+    {% if message.file_caption %}
+        <div class="mt-2 text-xs leading-snug {% if message.author == user %}text-white/80{% else %}text-gray-600{% endif %}">{{ message.file_caption }}</div>
     {% endif %}
 {% endif %}

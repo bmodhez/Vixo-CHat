@@ -1,10 +1,18 @@
 {% extends "account/email/base_message.txt" %}
-{% load i18n %}
 
-{% block content %}{% autoescape off %}{% blocktranslate %}You are receiving this email because you (or someone else) requested a password reset for {{ email }}.{% endblocktranslate %}
+{% block content %}{% autoescape off %}
+Hi there!
 
-{% blocktranslate %}We could not find an account for this email address in our database.{% endblocktranslate %}
+Someone (hopefully you!) tried to log in to Vixogram Connect, but we couldnt find an account linked to this email address.
 
-{% blocktranslate %}If you meant to reset your password, please try again using the exact email address you used when signing up.{% endblocktranslate %}
+Want to join the conversation? Wed love to have you! Click below to set up your profile and get started:
 
-{% blocktranslate %}If you did not request this, you can safely ignore this email.{% endblocktranslate %}{% endautoescape %}{% endblock content %}
+449 Sign Up for Vixogram Connect
+{{ signup_url }}
+
+If you didnt initiate this, please disregard this message. Your privacy and security are important to us.
+
+Cheers,
+
+Team Vixogram
+{% endautoescape %}{% endblock content %}

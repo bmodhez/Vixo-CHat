@@ -54,33 +54,46 @@ else:
 _cloud_name = os.environ.get('CLOUD_NAME')
 _cloud_key = os.environ.get('API_KEY')
 _cloud_secret = os.environ.get('API_SECRET')
-_use_cloudinary_media = bool(ENVIRONMENT == 'production' and _cloud_name and _cloud_key and _cloud_secret)
+_cloudinary_creds_present = bool(_cloud_name and _cloud_key and _cloud_secret)
+
+# Cloudinary media uploads
+# - Production defaults to Cloudinary when creds exist.
+# - You can force-enable in dev by setting USE_CLOUDINARY_MEDIA=1.
+USE_CLOUDINARY_MEDIA = _env_bool(
+    'USE_CLOUDINARY_MEDIA',
+    default=(ENVIRONMENT == 'production' and _cloudinary_creds_present),
+)
+_use_cloudinary_media = bool(USE_CLOUDINARY_MEDIA and _cloudinary_creds_present)
 
 # Django 4.2+ storage configuration
-if ENVIRONMENT == 'production':
-    STORAGES = {
-        'default': {
-            'BACKEND': 'cloudinary_storage.storage.MediaCloudinaryStorage' if _use_cloudinary_media else 'django.core.files.storage.FileSystemStorage',
-        },
-        'staticfiles': {
-            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
-        },
-    }
-else:
-    STORAGES = {
-        'default': {
-            'BACKEND': 'django.core.files.storage.FileSystemStorage',
-        },
-        'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
-        },
-    }
+# Media (uploads): Cloudinary when enabled, else local filesystem.
+# Static: unchanged (Whitenoise in production).
+_static_backend = (
+    'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    if ENVIRONMENT == 'production'
+    else 'django.contrib.staticfiles.storage.StaticFilesStorage'
+)
+
+STORAGES = {
+    'default': {
+        'BACKEND': (
+            'cloudinary_storage.storage.MediaCloudinaryStorage'
+            if _use_cloudinary_media
+            else 'django.core.files.storage.FileSystemStorage'
+        ),
+    },
+    'staticfiles': {
+        'BACKEND': _static_backend,
+    },
+}
 
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     ".onrender.com",
     'vixogram-connect.onrender.com',
+    ".devtunnels.ms",
+    '5nwjdjnl-8080.inc1.devtunnels.ms',
     
 ]
 
@@ -100,10 +113,21 @@ if _extra_allowed_hosts:
     ALLOWED_HOSTS.extend([h.strip() for h in _extra_allowed_hosts.split(",") if h.strip()])
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:*",
-    "http://127.0.0.1:*",
+    # Local development
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+
+    # VS Code Port Forwarding / Dev Tunnels
+    "https://*.devtunnels.ms",
+    "http://*.devtunnels.ms",
+    "https://*.inc1.devtunnels.ms",
+    "http://*.inc1.devtunnels.ms",
+
+    # Render
     'https://vixogram-connect.onrender.com',
-    'https://vixogram.onrender.com', # Agar koi aur variant hai toh
+    'https://vixogram.onrender.com',
 ]
 
 # Always allow Render subdomains (covers Blueprint/Dashboard setups).
@@ -132,6 +156,15 @@ if ENVIRONMENT == "production" or (_render_origin and _render_origin.startswith(
     CSRF_COOKIE_SECURE = True
     SESSION_COOKIE_SECURE = True
 
+# VS Code Port Forwarding / Dev Tunnels typically terminates TLS at the proxy.
+# Trust the forwarded proto so Django/allauth generate https:// links.
+_using_devtunnel = any(
+    str(h).strip().lower().endswith(".devtunnels.ms") for h in (ALLOWED_HOSTS or [])
+)
+if _using_devtunnel:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+
 # Application definition
 INSTALLED_APPS = [
     'daphne', # Daphne ko sabse upar rehne dein
@@ -153,6 +186,15 @@ INSTALLED_APPS = [
     'a_home',
     'a_users',
     'a_rtchat',
+]
+
+# Authentication
+# - Keep allauth backend for its flows.
+# - Add a simple backend to allow logging in via User.email as well as username
+#   (useful for users created via admin/legacy data without an allauth EmailAddress row).
+AUTHENTICATION_BACKENDS = [
+    'a_users.auth_backends.EmailOrUsernameModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
 SITE_ID = 1
@@ -333,7 +375,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Override if needed (e.g., for production):
 # - CHAT_UPLOAD_LIMIT_PER_ROOM: max uploads per user per room
 # - CHAT_UPLOAD_MAX_BYTES: max single file size
-CHAT_UPLOAD_LIMIT_PER_ROOM = 20
+CHAT_UPLOAD_LIMIT_PER_ROOM = int(os.environ.get('CHAT_UPLOAD_LIMIT_PER_ROOM', '5'))
 CHAT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 # Agora (Voice/Video Calls)
@@ -387,15 +429,18 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 # Allauth email verification (anti-spam)
 # - New users must verify email before they can use the account.
 ACCOUNT_UNIQUE_EMAIL = True
-ACCOUNT_EMAIL_VERIFICATION = 'mandatory'
+_email_verification_default = 'mandatory' if ENVIRONMENT == 'production' else 'optional'
+ACCOUNT_EMAIL_VERIFICATION = (os.getenv('ACCOUNT_EMAIL_VERIFICATION', _email_verification_default) or _email_verification_default).strip().lower()
 
 # Password reset UX/security:
-# - Prevent account enumeration (default True), and do not send "unknown account" emails.
-#   This avoids confusing users with a signup link when they enter a wrong/unregistered email.
-ACCOUNT_EMAIL_UNKNOWN_ACCOUNTS = False
+# - When True, allauth may send an "Unknown Account" email if a user attempts
+#   to access/reset using an email that is not registered.
+# - Note: this can increase account-enumeration surface (trade-off accepted here
+#   because the product wants this email).
+ACCOUNT_EMAIL_UNKNOWN_ACCOUNTS = True
 
 # Ensure confirmation links use the correct protocol.
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if ENVIRONMENT == 'production' else 'http'
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if (ENVIRONMENT == 'production' or _using_devtunnel) else 'http'
 
 # Allauth: use custom styled forms (Tailwind classes)
 ACCOUNT_FORMS = {
@@ -404,3 +449,27 @@ ACCOUNT_FORMS = {
     'reset_password': 'a_users.allauth_forms.CustomResetPasswordForm',
     'reset_password_from_key': 'a_users.allauth_forms.CustomResetPasswordKeyForm',
 }
+
+# Sentry (Error + Performance Monitoring)
+# Enabled only if SENTRY_DSN is set.
+SENTRY_DSN = (os.getenv('SENTRY_DSN', '') or '').strip()
+SENTRY_TRACES_SAMPLE_RATE = float(os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0.0') or '0.0')
+SENTRY_PROFILES_SAMPLE_RATE = float(os.getenv('SENTRY_PROFILES_SAMPLE_RATE', '0.0') or '0.0')
+
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.django import DjangoIntegration
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=ENVIRONMENT,
+            integrations=[DjangoIntegration(), CeleryIntegration()],
+            send_default_pii=_env_bool('SENTRY_SEND_DEFAULT_PII', default=False),
+            traces_sample_rate=max(0.0, min(1.0, SENTRY_TRACES_SAMPLE_RATE)),
+            profiles_sample_rate=max(0.0, min(1.0, SENTRY_PROFILES_SAMPLE_RATE)),
+        )
+    except Exception:
+        # Never fail app startup because of monitoring.
+        pass

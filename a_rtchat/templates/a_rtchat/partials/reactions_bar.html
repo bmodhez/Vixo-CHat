@@ -1,0 +1,17 @@
+{% comment %}
+Reaction pills shown under the message bubble. This region is updated via websocket.
+{% endcomment %}
+
+<div id="reactions-{{ message.id }}" class="mt-1 px-1 flex flex-wrap gap-1">
+    {% for r in message.reaction_pills %}
+        <button
+            type="button"
+            class="text-[11px] leading-4 px-2 py-0.5 rounded-full border border-gray-800 transition-colors
+                {% if r.reacted %}bg-emerald-500/20 text-emerald-300{% else %}bg-gray-900/60 text-gray-300 hover:bg-gray-800/60{% endif %}"
+            data-react-emoji
+            data-message-id="{{ message.id }}"
+            data-emoji="{{ r.emoji }}">
+            {{ r.emoji }}&nbsp;{{ r.count }}
+        </button>
+    {% endfor %}
+</div>
