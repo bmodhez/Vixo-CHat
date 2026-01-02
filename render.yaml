@@ -3,7 +3,7 @@ services:
     name: vixogram
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    buildCommand: pip install -r requirements.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
     startCommand: daphne -b 0.0.0.0 -p $PORT a_core.asgi:application
     envVars:
       - key: ENVIRONMENT
@@ -14,10 +14,21 @@ services:
       # - SECRET_KEY
       # - DATABASE_URL
       # - REDIS_URL (optional but recommended for Channels in production)
+      # - FIREBASE_ENABLED ("True"/"False")
+      # - FIREBASE_API_KEY
+      # - FIREBASE_AUTH_DOMAIN
+      # - FIREBASE_PROJECT_ID
+      # - FIREBASE_STORAGE_BUCKET
+      # - FIREBASE_MESSAGING_SENDER_ID
+      # - FIREBASE_APP_ID
+      # - FIREBASE_MEASUREMENT_ID (optional)
+      # - FIREBASE_VAPID_PUBLIC_KEY
+      # - FIREBASE_SERVICE_ACCOUNT_B64 (recommended) OR FIREBASE_SERVICE_ACCOUNT_JSON
       # - AGORA_APP_ID
       # - AGORA_APP_CERTIFICATE
       # - CLOUD_NAME / API_KEY / API_SECRET
       # - EMAIL_HOST_USER / EMAIL_HOST_PASSWORD
+      # - PBKDF2_ITERATIONS (optional: reduce login/signup latency on low-CPU hosts; try 150000)
 
   - type: cron
     name: vixogram-purge-old-messages

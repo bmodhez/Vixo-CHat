@@ -4,8 +4,12 @@
 <wrapper class="block w-full">
     <div class="flex flex-col lg:flex-row gap-4 lg:gap-6">
 
-        <aside class="w-full lg:w-72 shrink-0 max-h-[40dvh] lg:max-h-none lg:h-[45rem] bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-4 overflow-y-auto">
-            <div class="text-sm font-semibold text-gray-200 mb-3">Chats</div>
+        <aside id="chat_sidebar" class="hidden lg:block w-full lg:w-72 shrink-0">
+            <div id="chat_sidebar_panel" class="w-full max-w-md lg:max-w-none lg:w-72 max-h-[70dvh] lg:max-h-none lg:h-[45rem] bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl p-4 overflow-y-auto">
+                <div class="flex items-center justify-between gap-2 mb-3">
+                    <div class="text-sm font-semibold text-gray-200">Chats</div>
+                    <button type="button" id="chat_sidebar_close" class="lg:hidden inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-200 hover:bg-gray-800/60" aria-label="Close chats">×</button>
+                </div>
 
             {% if user.is_staff %}
                 <div class="mb-4">
@@ -33,17 +37,54 @@
 
             {% if sidebar_groupchats %}
                 <div class="text-xs font-semibold text-gray-400 mb-2">Group chats</div>
-                <ul class="space-y-1 mb-4">
-                    {% for room in sidebar_groupchats %}
-                        <li>
-                            <a href="{% url 'chatroom' room.group_name %}"
-                               class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-800/60
-                               {% if chat_group.group_name == room.group_name %}text-emerald-400 font-semibold{% else %}text-gray-300{% endif %}">
-                                {{ room.groupchat_name|default:room.group_name|slice:":30" }}
-                            </a>
-                        </li>
-                    {% endfor %}
-                </ul>
+                <div class="mb-4">
+                    {% if sidebar_groupchat_sections %}
+                        {% for section in sidebar_groupchat_sections %}
+                            <div class="mt-3 mb-1 text-[11px] font-semibold text-gray-400">{{ section.title }}</div>
+                            {% if section.rooms %}
+                                <ul class="space-y-1">
+                                    {% for room in section.rooms %}
+                                        <li>
+                                            <a href="{% url 'chatroom' room.group_name %}"
+                                               class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-800/60
+                                               {% if chat_group.group_name == room.group_name %}text-emerald-400 font-semibold{% else %}text-gray-300{% endif %}">
+                                                {{ room.groupchat_name|default:room.group_name|slice:":30" }}
+                                            </a>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <div class="px-3 py-2 text-xs text-gray-500">No rooms yet</div>
+                            {% endif %}
+                        {% endfor %}
+
+                        {% if sidebar_groupchats_remaining %}
+                            <ul class="space-y-1 mt-3">
+                                {% for room in sidebar_groupchats_remaining %}
+                                    <li>
+                                        <a href="{% url 'chatroom' room.group_name %}"
+                                           class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-800/60
+                                           {% if chat_group.group_name == room.group_name %}text-emerald-400 font-semibold{% else %}text-gray-300{% endif %}">
+                                            {{ room.groupchat_name|default:room.group_name|slice:":30" }}
+                                        </a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    {% else %}
+                        <ul class="space-y-1">
+                            {% for room in sidebar_groupchats %}
+                                <li>
+                                    <a href="{% url 'chatroom' room.group_name %}"
+                                       class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-800/60
+                                       {% if chat_group.group_name == room.group_name %}text-emerald-400 font-semibold{% else %}text-gray-300{% endif %}">
+                                        {{ room.groupchat_name|default:room.group_name|slice:":30" }}
+                                    </a>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </div>
             {% endif %}
 
             <div class="text-xs font-semibold text-gray-400 mb-2">Private rooms</div>
@@ -104,12 +145,20 @@
                     {% endfor %}
                 </ul>
             {% endif %}
+            </div>
         </aside>
 
-        <div id="chat_window" class="h-[70dvh] sm:h-[75dvh] lg:h-[45rem] flex flex-col bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl relative p-1 grow">
+        <div id="chat_window" class="h-[calc(100dvh-6rem)] sm:h-[calc(100dvh-6.5rem)] lg:h-[45rem] flex flex-col bg-gray-900/60 border border-gray-800 rounded-2xl shadow-2xl relative p-1 grow">
         
         <div class="flex items-center justify-between text-emerald-400 bg-gray-900/60 p-2 sticky top-0 z-10 border-b border-gray-800 rounded-t-2xl">
             <div class="flex items-center">
+                <button type="button" id="chat_sidebar_open" class="lg:hidden mr-2 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-gray-800/60 hover:bg-gray-800 text-gray-100" aria-label="Open chats">
+                    <span class="block w-5">
+                        <span class="block h-0.5 w-5 bg-gray-100 rounded"></span>
+                        <span class="block h-0.5 w-5 bg-gray-100 rounded mt-1"></span>
+                        <span class="block h-0.5 w-5 bg-gray-100 rounded mt-1"></span>
+                    </span>
+                </button>
                 <span id="online-count" class="pr-1 font-bold">{{ chat_group.users_online.count }}</span> online
                 {% if chat_group.is_code_room and chat_group.room_code %}
                     <span class="ml-3 text-xs text-gray-300">Room code: <span class="font-semibold text-emerald-400">{{ chat_group.room_code }}</span></span>
@@ -199,6 +248,11 @@
                 <div class="bg-gray-900/40 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-200">
                     You can view messages, but you are blocked from sending messages.
                 </div>
+            {% elif needs_email_verification_for_chat %}
+                <div class="bg-gray-900/40 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-200">
+                    Verify your email to continue chatting.
+                    <a href="{% url 'profile-settings' %}" class="ml-2 inline-flex items-center text-emerald-400 hover:text-emerald-300 font-semibold">Verify now</a>
+                </div>
             {% elif chat_muted_seconds and chat_muted_seconds > 0 %}
                 <div class="bg-gray-900/40 border border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-200">
                     You are on cooldown for <span class="font-semibold text-emerald-400">{{ chat_muted_seconds }}s</span>. Please wait.
@@ -220,6 +274,15 @@
                         <div id="chat_body_wrap" class="grow">
                             <div class="relative flex items-center gap-2">
                                 {{ form.body }}
+
+                                <div
+                                    id="mention_panel"
+                                    class="hidden absolute bottom-full left-0 mb-2 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-gray-800 bg-gray-900/95 shadow-lg shadow-black/30 p-1 z-30"
+                                    role="listbox"
+                                    aria-label="Mention suggestions"
+                                >
+                                    <div id="mention_list" class="max-h-64 overflow-y-auto"></div>
+                                </div>
 
                                 <button
                                     type="button"
@@ -351,6 +414,8 @@
 <script>
     (function () {
         const chatroomName = "{{ chatroom_name|escapejs }}";
+        const currentUserId = parseInt("{{ user.id|default:0 }}", 10) || 0;
+        let lastOtherReadId = parseInt("{{ other_last_read_id|default:0 }}", 10) || 0;
         const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const wsUrl = `${wsScheme}://${window.location.host}/ws/chatroom/${chatroomName}`;
         const pollUrl = "{% url 'chat-poll' chatroom_name %}";
@@ -414,6 +479,193 @@
 
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') close();
+            });
+        })();
+
+        (function initMentionAutocomplete() {
+            const input = document.getElementById('id_body');
+            const panel = document.getElementById('mention_panel');
+            const list = document.getElementById('mention_list');
+            const url = "{% url 'mention-search' %}";
+
+            if (!input || !panel || !list) return;
+
+            let open = false;
+            let activeIndex = 0;
+            let results = [];
+            let current = null; // { atIndex, caret }
+            let debounceTimer = null;
+            let abortController = null;
+
+            function isOpen() {
+                return open && !panel.classList.contains('hidden');
+            }
+
+            function close() {
+                open = false;
+                results = [];
+                current = null;
+                activeIndex = 0;
+                panel.classList.add('hidden');
+                list.innerHTML = '';
+            }
+
+            function show() {
+                open = true;
+                panel.classList.remove('hidden');
+            }
+
+            function getMentionContext() {
+                const caret = input.selectionStart ?? (input.value || '').length;
+                const before = (input.value || '').slice(0, caret);
+                const atIndex = before.lastIndexOf('@');
+                if (atIndex < 0) return null;
+                if (atIndex > 0) {
+                    const prev = before[atIndex - 1];
+                    if (prev && !/\s/.test(prev)) return null;
+                }
+                const raw = before.slice(atIndex + 1);
+                if (!raw) return null;
+                if (/\s/.test(raw)) return null;
+                if (!/^[A-Za-z0-9_.-]{1,32}$/.test(raw)) return null;
+                return { atIndex, caret, q: raw };
+            }
+
+            function render() {
+                if (!results.length) {
+                    close();
+                    return;
+                }
+                show();
+                const safeIndex = Math.max(0, Math.min(activeIndex, results.length - 1));
+                activeIndex = safeIndex;
+
+                list.innerHTML = results
+                    .map((r, idx) => {
+                        const active = idx === activeIndex;
+                        const cls = active
+                            ? 'bg-gray-800/80 text-white'
+                            : 'hover:bg-gray-800/50 text-gray-200';
+                        const avatar = r.avatar
+                            ? `<img src="${r.avatar}" alt="" class="h-7 w-7 rounded-full border border-gray-800" />`
+                            : `<div class="h-7 w-7 rounded-full border border-gray-800 bg-gray-800/70"></div>`;
+                        const display = (r.display || r.username || '').toString();
+                        const username = (r.username || '').toString();
+                        return `
+                            <button
+                                type="button"
+                                class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left ${cls}"
+                                data-idx="${idx}"
+                            >
+                                ${avatar}
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold truncate">${display}</div>
+                                    <div class="text-[11px] text-gray-400 truncate">@${username}</div>
+                                </div>
+                            </button>
+                        `;
+                    })
+                    .join('');
+            }
+
+            function insertMention(username) {
+                if (!current || !username) return;
+                const value = input.value || '';
+                const before = value.slice(0, current.atIndex);
+                const after = value.slice(current.caret);
+                const insert = `@${username} `;
+                input.value = before + insert + after;
+                const nextPos = (before + insert).length;
+                try { input.setSelectionRange(nextPos, nextPos); } catch (e) {}
+                try { input.focus(); } catch (e) {}
+                close();
+            }
+
+            async function fetchResults(q) {
+                if (abortController) {
+                    try { abortController.abort(); } catch (e) {}
+                }
+                abortController = new AbortController();
+                const resp = await fetch(`${url}?q=${encodeURIComponent(q)}`, {
+                    credentials: 'same-origin',
+                    signal: abortController.signal,
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (!resp.ok) return [];
+                const data = await resp.json();
+                return Array.isArray(data && data.results) ? data.results : [];
+            }
+
+            function schedule() {
+                const ctx = getMentionContext();
+                if (!ctx) {
+                    close();
+                    return;
+                }
+                current = { atIndex: ctx.atIndex, caret: ctx.caret };
+                const q = ctx.q;
+
+                if (debounceTimer) window.clearTimeout(debounceTimer);
+                debounceTimer = window.setTimeout(async () => {
+                    try {
+                        const res = await fetchResults(q);
+                        results = res || [];
+                        activeIndex = 0;
+                        render();
+                    } catch (e) {
+                        // ignore abort/network errors
+                    }
+                }, 150);
+            }
+
+            input.addEventListener('input', schedule);
+            input.addEventListener('click', schedule);
+
+            input.addEventListener('keydown', (e) => {
+                if (!isOpen()) {
+                    if (e.key === 'Escape') close();
+                    return;
+                }
+
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    activeIndex = Math.min(activeIndex + 1, results.length - 1);
+                    render();
+                    return;
+                }
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    activeIndex = Math.max(activeIndex - 1, 0);
+                    render();
+                    return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                    const chosen = results[activeIndex];
+                    if (chosen && chosen.username) {
+                        e.preventDefault();
+                        insertMention(chosen.username);
+                    }
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    close();
+                }
+            });
+
+            panel.addEventListener('click', (e) => {
+                const btn = e.target && e.target.closest ? e.target.closest('button[data-idx]') : null;
+                if (!btn) return;
+                const idx = Number(btn.getAttribute('data-idx'));
+                const chosen = results[idx];
+                if (chosen && chosen.username) insertMention(chosen.username);
+            });
+
+            document.addEventListener('click', (e) => {
+                const t = e.target;
+                if (!t) return;
+                if (panel.contains(t) || input.contains(t)) return;
+                close();
             });
         })();
 
@@ -788,6 +1040,33 @@
         let wsConnected = false;
         let lastId = 0;
 
+        function sendReadAck(id) {
+            if (!wsConnected || !socket) return;
+            const last = parseInt(id || 0, 10) || 0;
+            if (last <= 0) return;
+            try {
+                socket.send(JSON.stringify({ type: 'read', last_read_id: last }));
+            } catch {
+                // ignore
+            }
+        }
+
+        function applyReadTicks(lastReadId) {
+            const maxId = parseInt(lastReadId || 0, 10) || 0;
+            if (maxId <= 0) return;
+            const ticks = document.querySelectorAll('[data-read-tick][data-message-id]') || [];
+            ticks.forEach((el) => {
+                const mid = parseInt(el.getAttribute('data-message-id') || '0', 10) || 0;
+                if (mid && mid <= maxId) el.textContent = '✓✓';
+            });
+        }
+
+        function maybeAckReadIfVisible() {
+            if (document.visibilityState !== 'visible') return;
+            updateLastIdFromDom();
+            sendReadAck(lastId);
+        }
+
         function hydrateLocalTimes(root) {
             const container = root || document;
             const nodes = container.querySelectorAll ? container.querySelectorAll('time[data-dt]') : [];
@@ -830,6 +1109,8 @@
 
             socket.onopen = function () {
                 wsConnected = true;
+                updateLastIdFromDom();
+                if (document.visibilityState === 'visible') sendReadAck(lastId);
                 scrollToBottom();
             };
 
@@ -852,6 +1133,17 @@
                     hydrateLocalTimes(messagesEl);
                     updateLastIdFromDom();
                     safeScrollToBottom();
+                    if (document.visibilityState === 'visible') sendReadAck(lastId);
+                    return;
+                }
+
+                if (payload.type === 'read_receipt') {
+                    const readerId = parseInt(payload.reader_id || 0, 10) || 0;
+                    const lastReadId = parseInt(payload.last_read_id || 0, 10) || 0;
+                    if (readerId && readerId !== currentUserId) {
+                        lastOtherReadId = Math.max(lastOtherReadId || 0, lastReadId || 0);
+                        applyReadTicks(lastReadId);
+                    }
                     return;
                 }
 
@@ -865,6 +1157,7 @@
                     if (el) {
                         el.outerHTML = payload.html;
                         hydrateLocalTimes(document);
+                        applyReadTicks(lastOtherReadId);
                     }
                     return;
                 }
@@ -911,12 +1204,68 @@
             };
         }
 
+        function isNearBottom() {
+            try {
+                const el = document.getElementById('chat_container');
+                if (!el) return true;
+                return (el.scrollHeight - el.scrollTop - el.clientHeight) < 120;
+            } catch {
+                return true;
+            }
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') return;
+            updateLastIdFromDom();
+            if (isNearBottom()) sendReadAck(lastId);
+        });
+
+        window.addEventListener('focus', () => {
+            updateLastIdFromDom();
+            if (isNearBottom()) sendReadAck(lastId);
+        });
+
+        // Use query-by-id here to avoid referencing `chatContainer` before it's defined later in this file.
+        const __chatContainerForRead = document.getElementById('chat_container');
+        if (__chatContainerForRead) {
+            __chatContainerForRead.addEventListener('scroll', () => {
+                if (!isNearBottom()) return;
+                updateLastIdFromDom();
+                if (document.visibilityState === 'visible') sendReadAck(lastId);
+            }, { passive: true });
+        }
+
         // Ensure correct position on initial render
         document.addEventListener('DOMContentLoaded', function () {
             updateLastIdFromDom();
             hydrateLocalTimes(document);
+            applyReadTicks(lastOtherReadId);
             safeScrollToBottom();
         });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') maybeAckReadIfVisible();
+        });
+        window.addEventListener('focus', () => {
+            maybeAckReadIfVisible();
+        });
+
+        (function initReadAckOnScroll() {
+            const chatContainer = document.getElementById('chat_container');
+            if (!chatContainer) return;
+            let timer = null;
+            chatContainer.addEventListener('scroll', () => {
+                if (timer) window.clearTimeout(timer);
+                timer = window.setTimeout(() => {
+                    try {
+                        const remaining = chatContainer.scrollHeight - (chatContainer.scrollTop + chatContainer.clientHeight);
+                        if (remaining <= 80) maybeAckReadIfVisible();
+                    } catch {
+                        // ignore
+                    }
+                }, 120);
+            }, { passive: true });
+        })();
 
         // -------- Reactions (WhatsApp style click popup) --------
         function closeAllReactionPickers() {
@@ -1524,4 +1873,65 @@
     #chat_container::-webkit-scrollbar-thumb { background: rgb(75 85 99); border-radius: 9999px; }
     #chat_container::-webkit-scrollbar-thumb:hover { background: rgb(16 185 129); }
 </style>
+{% endblock %}
+
+{% block extra_body %}
+<script>
+    (function initMobileSidebarToggle() {
+        const sidebar = document.getElementById('chat_sidebar');
+        const panel = document.getElementById('chat_sidebar_panel');
+        const openBtn = document.getElementById('chat_sidebar_open');
+        const closeBtn = document.getElementById('chat_sidebar_close');
+        if (!sidebar || !panel || !openBtn || !closeBtn) return;
+
+        const isMobile = () => !window.matchMedia('(min-width: 1024px)').matches;
+
+        const overlayClasses = [
+            'fixed', 'inset-0', 'z-50',
+            'flex', 'items-start', 'justify-center',
+            'bg-gray-900/60', 'p-4', 'pt-20'
+        ];
+
+        function closeSidebar() {
+            if (!isMobile()) return;
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove(...overlayClasses);
+            document.body.classList.remove('overflow-hidden');
+        }
+
+        function openSidebar() {
+            if (!isMobile()) return;
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add(...overlayClasses);
+            document.body.classList.add('overflow-hidden');
+        }
+
+        function sync() {
+            if (!isMobile()) {
+                sidebar.classList.remove('hidden');
+                sidebar.classList.remove(...overlayClasses);
+                document.body.classList.remove('overflow-hidden');
+                return;
+            }
+            closeSidebar();
+        }
+
+        openBtn.addEventListener('click', openSidebar);
+        closeBtn.addEventListener('click', closeSidebar);
+
+        sidebar.addEventListener('click', (e) => {
+            if (e.target === sidebar) {
+                closeSidebar();
+                return;
+            }
+
+            const link = e.target && e.target.closest ? e.target.closest('a') : null;
+            if (!link) return;
+            closeSidebar();
+        });
+
+        window.addEventListener('resize', sync);
+        sync();
+    })();
+</script>
 {% endblock %}

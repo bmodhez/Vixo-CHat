@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<wrapper class="block max-w-2xl mx-auto my-10 px-6">
+    <div class="bg-gray-800 p-6 sm:p-8 rounded-2xl shadow-2xl border border-gray-700">
+        <div class="flex items-center justify-between gap-3 mb-5">
+            <div>
+                <h1 class="text-xl sm:text-2xl font-bold text-white">Notifications</h1>
+                <p class="text-sm text-gray-400">Offline updates (mentions, replies, follows).</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <a href="{% url 'home' %}" class="bg-gray-700 hover:bg-gray-600 text-white rounded-lg px-4 py-2 transition-colors text-sm">Back</a>
+                <form method="post" action="{% url 'notifications-read-all' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 transition-colors text-sm">
+                        Mark all read
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        {% if notifications %}
+            <div class="space-y-3">
+                {% for n in notifications %}
+                    <a href="{{ n.url|default:'#' }}" class="block rounded-xl border border-gray-700 bg-gray-900/40 hover:bg-gray-900/70 transition px-4 py-3">
+                        <div class="flex items-start gap-3">
+                            <div class="mt-1 h-2.5 w-2.5 flex-none rounded-full {% if n.is_read %}bg-gray-600{% else %}bg-emerald-400{% endif %}"></div>
+                            <div class="min-w-0 flex-1">
+                                <div class="text-sm text-gray-100">
+                                    {% if n.type == 'follow' %}
+                                        <span class="font-semibold">Follow</span>
+                                    {% elif n.type == 'reply' %}
+                                        <span class="font-semibold">Reply</span>
+                                    {% elif n.type == 'mention' %}
+                                        <span class="font-semibold">Mention</span>
+                                    {% else %}
+                                        <span class="font-semibold">Notification</span>
+                                    {% endif %}
+                                    {% if n.from_user %}
+                                        <span class="text-gray-300">from @{{ n.from_user.username }}</span>
+                                    {% endif %}
+                                </div>
+                                {% if n.preview %}
+                                    <div class="mt-1 text-xs text-gray-300 truncate">{{ n.preview }}</div>
+                                {% endif %}
+                                <div class="mt-2 text-[11px] text-gray-500">{{ n.created }}</div>
+                            </div>
+                        </div>
+                    </a>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="text-center py-10 text-gray-400">No notifications yet.</div>
+        {% endif %}
+    </div>
+</wrapper>
+{% endblock %}

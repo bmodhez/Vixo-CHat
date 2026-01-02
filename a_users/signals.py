@@ -10,20 +10,20 @@ except Exception:  # pragma: no cover
 
 from .tasks import send_welcome_email
 
-# 1. Jab naya user banega, tabhi profile banegi
+# Profile create/ensure
+# NOTE: Don't call `profile.save()` on every `User` save.
+# Django updates `last_login` on login, which would trigger this signal and add
+# an extra write (and potential file-storage side effects) on every login.
 @receiver(post_save, sender=User)
-def create_profile(sender, instance, created, **kwargs):
+def ensure_profile(sender, instance, created, **kwargs):
     if created:
         Profile.objects.create(user=instance)
+        return
 
-# 2. Jab user save hoga, toh uski profile ko bhi save (sync) karo
-# Isme hum 'user.save()' call nahi karenge taaki loop na bane
-@receiver(post_save, sender=User)
-def save_profile(sender, instance, **kwargs):
+    # Best-effort: ensure a profile exists for legacy/admin-created users.
     try:
-        instance.profile.save()
+        _ = instance.profile
     except Profile.DoesNotExist:
-        # Agar kisi wajah se profile nahi bani, toh ab bana do
         Profile.objects.create(user=instance)
 
 

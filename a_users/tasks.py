@@ -46,3 +46,36 @@ def send_welcome_email(self, user_id: int) -> None:
         recipient_list=[email],
         fail_silently=False,
     )
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def send_mention_push_task(
+    self,
+    user_id: int,
+    *,
+    from_username: str,
+    chatroom_name: str,
+    preview: str = '',
+) -> None:
+    """Send an @mention push notification via FCM (best-effort).
+
+    This runs in the background to keep chat message sends fast.
+    """
+
+    User = get_user_model()
+    user = User.objects.filter(id=user_id, is_active=True).first()
+    if not user:
+        return
+
+    try:
+        from a_users.fcm import send_mention_push
+
+        send_mention_push(
+            user,
+            from_username=(from_username or '')[:150],
+            chatroom_name=(chatroom_name or '')[:128],
+            preview=(preview or '')[:300],
+        )
+    except Exception:
+        # Best-effort: never fail the task hard.
+        return

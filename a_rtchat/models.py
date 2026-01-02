@@ -5,6 +5,9 @@ from PIL import Image
 import os
 import mimetypes
 
+from .models_notifications import Notification
+from .models_read import ChatReadState
+
 class ChatGroup(models.Model):
     group_name = models.CharField(max_length=128, unique=True, blank=True)
     groupchat_name = models.CharField(max_length=128, null=True, blank=True)
@@ -71,6 +74,10 @@ class GroupMessage(models.Model):
     
     class Meta:
         ordering = ['-created']
+        indexes = [
+            models.Index(fields=['group', '-created'], name='gm_group_created_idx'),
+            models.Index(fields=['author', '-created'], name='gm_author_created_idx'),
+        ]
         
     @property    
     def is_image(self):

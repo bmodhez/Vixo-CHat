@@ -40,3 +40,33 @@ _DEFAULT_AVATAR_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12
 DEFAULT_AVATAR_DATA_URI = (
     "data:image/svg+xml;base64," + base64.b64encode(_DEFAULT_AVATAR_SVG.encode("utf-8")).decode("ascii")
 )
+
+
+class FCMToken(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_tokens')
+    token = models.CharField(max_length=256, unique=True)
+    user_agent = models.CharField(max_length=255, blank=True, default='')
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"FCMToken(user={self.user_id})"
+
+
+class Follow(models.Model):
+    follower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='following_rel')
+    following = models.ForeignKey(User, on_delete=models.CASCADE, related_name='followers_rel')
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['follower', 'following'], name='unique_follow'),
+        ]
+        indexes = [
+            models.Index(fields=['following', '-created'], name='follow_following_idx'),
+            models.Index(fields=['follower', '-created'], name='follow_follower_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.follower_id} -> {self.following_id}"

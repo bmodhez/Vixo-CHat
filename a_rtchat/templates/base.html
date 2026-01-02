@@ -30,6 +30,35 @@
                     <a href="{% url 'home' %}" class="text-xs sm:text-sm text-gray-300 hover:text-white transition-colors px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800">
                         Chat
                     </a>
+                    <div class="relative">
+                        <button
+                            type="button"
+                            id="notif_btn"
+                            class="relative text-xs sm:text-sm text-gray-300 hover:text-white transition-colors px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800"
+                            aria-label="Notifications"
+                            aria-haspopup="menu"
+                            aria-expanded="false"
+                            hx-get="{% url 'notifications-dropdown' %}"
+                            hx-target="#notif_dropdown_body"
+                            hx-swap="innerHTML"
+                        >
+                            <span class="inline-flex items-center gap-2">
+                                <span class="text-base" aria-hidden="true">🔔</span>
+                                <span class="hidden sm:inline">Notifications</span>
+                            </span>
+                            <span id="nav_notif_badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-emerald-500 text-[10px] leading-5 text-center font-bold text-white"></span>
+                        </button>
+
+                        <div id="notif_dropdown" class="hidden absolute right-0 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-gray-800 bg-gray-900/95 shadow-2xl shadow-black/30 overflow-hidden" role="menu">
+                            <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+                                <div class="text-sm font-semibold text-white">Notifications</div>
+                                <button type="button" id="notif_close" class="text-gray-300 hover:text-white">×</button>
+                            </div>
+                            <div id="notif_dropdown_body" class="px-4 py-4 max-h-[22rem] overflow-y-auto">
+                                <div class="text-xs text-gray-400">Loading…</div>
+                            </div>
+                        </div>
+                    </div>
                     <a href="{% url 'profile' %}" class="flex items-center gap-2 px-2.5 sm:px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">
                         <img src="{{ user.profile.avatar }}" class="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover border border-gray-700">
                         <span class="hidden sm:inline text-sm text-gray-200 font-semibold">{{ user.username }}</span>
@@ -275,6 +304,7 @@
     (function initGlobalCallInvites() {
         // Lets chat pages know a global handler exists (avoid duplicate toasts)
         window.__hasGlobalCallInvite = true;
+        window.__hasGlobalMentionNotify = true;
 
         const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const wsUrl = `${wsScheme}://${window.location.host}/ws/notify/`;
@@ -284,6 +314,89 @@
         let ringTimer = null;
         let audioUnlocked = false;
         const recentInvites = new Map();
+        const recentMentions = new Map();
+        let notifUnread = parseInt('{{ NAV_NOTIF_UNREAD|default:0 }}', 10) || 0;
+
+        function updateNotifBadge() {
+            const el = document.getElementById('nav_notif_badge');
+            if (!el) return;
+            if (notifUnread > 0) {
+                el.textContent = notifUnread > 99 ? '99+' : String(notifUnread);
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        }
+
+        function bumpNotifUnread() {
+            notifUnread = Math.min(999, (notifUnread || 0) + 1);
+            updateNotifBadge();
+        }
+
+        function isOnChatRoom(roomName) {
+            try {
+                if (!roomName) return false;
+                return window.location.pathname.startsWith('/chat/room/') && window.location.pathname.endsWith('/' + encodeURIComponent(roomName));
+            } catch {
+                return false;
+            }
+        }
+
+        function initNotifDropdown() {
+            const btn = document.getElementById('notif_btn');
+            const panel = document.getElementById('notif_dropdown');
+            const closeBtn = document.getElementById('notif_close');
+            if (!btn || !panel) return;
+
+            const open = () => {
+                panel.classList.remove('hidden');
+                btn.setAttribute('aria-expanded', 'true');
+                try {
+                    if (window.htmx && typeof window.htmx.ajax === 'function') {
+                        const url = btn.getAttribute('hx-get');
+                        if (url) window.htmx.ajax('GET', url, { target: '#notif_dropdown_body', swap: 'innerHTML' });
+                    }
+                } catch {}
+            };
+            const close = () => {
+                panel.classList.add('hidden');
+                btn.setAttribute('aria-expanded', 'false');
+            };
+            const toggle = () => {
+                if (panel.classList.contains('hidden')) open();
+                else close();
+            };
+
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                toggle();
+            });
+            if (closeBtn) closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                close();
+            });
+
+            document.addEventListener('click', (e) => {
+                const t = e.target;
+                if (!t) return;
+                if (panel.classList.contains('hidden')) return;
+                if (panel.contains(t) || btn.contains(t)) return;
+                close();
+            }, true);
+
+            document.body.addEventListener('htmx:afterRequest', (e) => {
+                // If mark-all-read ran from dropdown, clear badge.
+                const target = e && e.target;
+                if (!target) return;
+                if (target.getAttribute && String(target.getAttribute('hx-post') || '').includes('notifications/read-all')) {
+                    notifUnread = 0;
+                    updateNotifBadge();
+                }
+            });
+        }
+
+        updateNotifBadge();
+        initNotifDropdown();
 
         function unlockAudioOnce() {
             if (audioUnlocked) return;
@@ -433,6 +546,65 @@
             container.appendChild(toast);
         }
 
+        function showMention(payload) {
+            const from = payload.from_username || 'Someone';
+            const room = payload.chatroom_name || '';
+            const messageId = payload.message_id || 0;
+            const preview = (payload.preview || '').trim();
+
+            if (!room) return;
+
+            // If user is already inside that room, they can see the message.
+            if (isOnChatRoom(room)) return;
+
+            const key = `${room}:${from}:${messageId}`;
+            const now = Date.now();
+            const last = recentMentions.get(key) || 0;
+            if (now - last < 1200) return;
+            recentMentions.set(key, now);
+
+            const url = `/chat/room/${encodeURIComponent(room)}`;
+
+            // Badge: only when user is not already on that room.
+            bumpNotifUnread();
+
+            const container = ensureIncomingContainer();
+            const toast = document.createElement('div');
+            toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20';
+            toast.innerHTML = `
+                <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-emerald-400"></div>
+                <div class="flex-1 min-w-0">
+                    <div class="font-semibold">You were mentioned</div>
+                    <div class="text-gray-300 text-xs mt-0.5">by @${from} • room ${room}</div>
+                    ${preview ? `<div class="mt-2 text-xs text-gray-300 truncate">${escapeHtml(preview)}</div>` : ''}
+                    <div class="mt-3">
+                        <a href="${url}" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Open chat</a>
+                    </div>
+                </div>
+                <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
+                    <span aria-hidden="true">×</span>
+                </button>
+            `;
+
+            const removeToast = () => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 200);
+            };
+
+            toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
+            setTimeout(removeToast, 12000);
+            container.appendChild(toast);
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
         function connect() {
             let socket;
             try {
@@ -445,6 +617,43 @@
                 let payload;
                 try { payload = JSON.parse(event.data); } catch { return; }
                 if (payload.type === 'call_invite') showIncomingCall(payload);
+                if (payload.type === 'mention') showMention(payload);
+                if (payload.type === 'reply') {
+                    // Treat reply like mention for toasts.
+                    showMention({
+                        from_username: payload.from_username,
+                        chatroom_name: payload.chatroom_name,
+                        message_id: payload.message_id,
+                        preview: payload.preview,
+                    });
+                }
+                if (payload.type === 'follow') {
+                    const from = payload.from_username || 'Someone';
+                    bumpNotifUnread();
+                    const container = ensureIncomingContainer();
+                    const toast = document.createElement('div');
+                    toast.className = 'pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-800 bg-gray-900/90 px-4 py-3 text-sm text-gray-100 shadow-lg shadow-black/20';
+                    const url = payload.url || '/';
+                    const preview = (payload.preview || '').trim();
+                    toast.innerHTML = `
+                        <div class="mt-0.5 h-2.5 w-2.5 flex-none rounded-full bg-emerald-400"></div>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-semibold">New follower</div>
+                            <div class="text-gray-300 text-xs mt-0.5">@${escapeHtml(from)}</div>
+                            ${preview ? `<div class="mt-2 text-xs text-gray-300 truncate">${escapeHtml(preview)}</div>` : ''}
+                            <div class="mt-3">
+                                <a href="${url}" class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg transition-colors">Open profile</a>
+                            </div>
+                        </div>
+                        <button type="button" data-close class="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800/60 transition" aria-label="Dismiss">
+                            <span aria-hidden="true">×</span>
+                        </button>
+                    `;
+                    const removeToast = () => { toast.classList.add('opacity-0'); setTimeout(() => toast.remove(), 200); };
+                    toast.querySelector('[data-close]')?.addEventListener('click', removeToast);
+                    setTimeout(removeToast, 12000);
+                    container.appendChild(toast);
+                }
             };
             socket.onclose = function () {
                 setTimeout(connect, 1200);
@@ -452,6 +661,161 @@
         }
 
         connect();
+    })();
+    {% endif %}
+
+    {% if user.is_authenticated and FIREBASE_ENABLED %}
+    (function initFcmWebPush() {
+        if (!('serviceWorker' in navigator)) return;
+        if (!('Notification' in window)) return;
+
+        const vapidKey = '{{ FIREBASE_VAPID_PUBLIC_KEY|default:""|escapejs }}';
+        let cfg = {};
+        try { cfg = JSON.parse('{{ FIREBASE_CONFIG_JSON|default:"{}"|escapejs }}'); } catch { cfg = {}; }
+        if (!vapidKey || !cfg || !cfg.messagingSenderId) return;
+
+        function postToken(token) {
+            if (!token) return;
+            const body = new URLSearchParams();
+            body.set('token', token);
+            fetch('{% url "push-register" %}', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : ''),
+                },
+                body,
+            }).catch(() => {});
+        }
+
+        async function init() {
+            // Load Firebase SDK (compat) lazily so non-FCM pages stay fast.
+            const loadScript = (src) => new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.async = true;
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+            });
+
+            try {
+                await loadScript('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
+                await loadScript('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
+            } catch {
+                return;
+            }
+
+            if (!window.firebase || !firebase.initializeApp) return;
+
+            try {
+                // Avoid double-init if another script already did it.
+                if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(cfg);
+            } catch {
+                // ignore
+            }
+
+            let registration;
+            try {
+                registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+            } catch {
+                return;
+            }
+
+            if (Notification.permission === 'denied') return;
+
+            let messaging;
+            try {
+                messaging = firebase.messaging();
+            } catch {
+                return;
+            }
+
+            let tokenSetupDone = false;
+            async function setupTokenOnce() {
+                if (tokenSetupDone) return;
+                tokenSetupDone = true;
+                try {
+                    const token = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
+                    postToken(token);
+                } catch {
+                    // ignore
+                }
+            }
+
+            async function ensurePermissionViaGesture() {
+                if (Notification.permission === 'granted') return true;
+                if (Notification.permission === 'denied') return false;
+                try {
+                    const p = await Notification.requestPermission();
+                    return p === 'granted';
+                } catch {
+                    return false;
+                }
+            }
+
+            // If already granted, register immediately. Otherwise wait for the first user click
+            // (most browsers require a user gesture to show the permission prompt reliably).
+            if (Notification.permission === 'granted') {
+                await setupTokenOnce();
+            } else if (Notification.permission !== 'denied') {
+                document.addEventListener('click', async () => {
+                    const ok = await ensurePermissionViaGesture();
+                    if (ok) await setupTokenOnce();
+                }, { once: true, capture: true });
+            }
+
+            // Foreground messages (tab open) -> if the tab isn't visible, show a native notification.
+            // Use service worker notifications so click handling works consistently.
+            try {
+                messaging.onMessage((payload) => {
+                    try {
+                        if (document.visibilityState === 'visible') return;
+                        const n = (payload && payload.notification) || {};
+                        const data = (payload && payload.data) || {};
+                        const title = n.title || data.title || 'Vixo Connect';
+                        const opts = {
+                            body: n.body || data.body || '',
+                            icon: n.icon || '/static/favicon.ico',
+                            data: { url: data.url || '/' },
+                        };
+                        if (registration && registration.showNotification) {
+                            registration.showNotification(title, opts);
+                        } else {
+                            const notif = new Notification(title, opts);
+                            notif.onclick = () => {
+                                try { window.open(opts.data.url || '/', '_blank'); } catch {}
+                            };
+                        }
+                    } catch {
+                        // ignore
+                    }
+                });
+            } catch {
+                // ignore
+            }
+        }
+
+        init();
+    })();
+    {% endif %}
+
+    {% if user.is_authenticated %}
+    (function initNavNotifBadge() {
+        try {
+            const unread = parseInt('{{ NAV_NOTIF_UNREAD|default:0 }}', 10) || 0;
+            const el = document.getElementById('nav_notif_badge');
+            if (!el) return;
+            if (unread > 0) {
+                el.textContent = unread > 99 ? '99+' : String(unread);
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        } catch {
+            // ignore
+        }
     })();
     {% endif %}
 </script>

@@ -188,6 +188,20 @@ INSTALLED_APPS = [
     'a_rtchat',
 ]
 
+# Password hashing
+#
+# Django's default PBKDF2 iterations can be slow on low-CPU hosts (login/signup feel laggy).
+# You can tune it via env var PBKDF2_ITERATIONS.
+# This custom hasher will NOT downgrade existing stronger hashes.
+PASSWORD_HASHERS = [
+    'a_core.hashers.ConfigurablePBKDF2PasswordHasher',
+    # Fallbacks (in case older hashes exist)
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+]
+
 # Authentication
 # - Keep allauth backend for its flows.
 # - Add a simple backend to allow logging in via User.email as well as username
@@ -237,6 +251,8 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'a_core.context_processors.firebase_config',
+                'a_users.context_processors.notifications_badge',
             ],
         },
     },
@@ -401,7 +417,7 @@ EMAIL_HOST = (os.getenv('EMAIL_HOST', 'smtp.gmail.com') or 'smtp.gmail.com').str
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587') or '587')
 EMAIL_USE_TLS = _env_bool('EMAIL_USE_TLS', default=True)
 EMAIL_USE_SSL = _env_bool('EMAIL_USE_SSL', default=False)
-EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '20') or '20')
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '8') or '8')
 
 # Avoid empty From: headers.
 DEFAULT_FROM_EMAIL = (os.getenv('DEFAULT_FROM_EMAIL', '') or '').strip() or (EMAIL_HOST_USER or 'no-reply@localhost')
@@ -473,3 +489,22 @@ if SENTRY_DSN:
     except Exception:
         # Never fail app startup because of monitoring.
         pass
+
+
+# --- Firebase Cloud Messaging (Web Push) ---
+# Public config is safe to expose to the client, but keep server credentials in env only.
+FIREBASE_ENABLED = _env_bool('FIREBASE_ENABLED', default=False)
+FIREBASE_API_KEY = (os.getenv('FIREBASE_API_KEY', '') or '').strip()
+FIREBASE_AUTH_DOMAIN = (os.getenv('FIREBASE_AUTH_DOMAIN', '') or '').strip()
+FIREBASE_PROJECT_ID = (os.getenv('FIREBASE_PROJECT_ID', '') or '').strip()
+FIREBASE_STORAGE_BUCKET = (os.getenv('FIREBASE_STORAGE_BUCKET', '') or '').strip()
+FIREBASE_MESSAGING_SENDER_ID = (os.getenv('FIREBASE_MESSAGING_SENDER_ID', '') or '').strip()
+FIREBASE_APP_ID = (os.getenv('FIREBASE_APP_ID', '') or '').strip()
+FIREBASE_MEASUREMENT_ID = (os.getenv('FIREBASE_MEASUREMENT_ID', '') or '').strip()
+
+# Web push (VAPID) public key (safe to expose)
+FIREBASE_VAPID_PUBLIC_KEY = (os.getenv('FIREBASE_VAPID_PUBLIC_KEY', '') or '').strip()
+
+# Server-side send credentials (secret): provide either raw JSON or base64 JSON.
+FIREBASE_SERVICE_ACCOUNT_JSON = (os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON', '') or '').strip()
+FIREBASE_SERVICE_ACCOUNT_B64 = (os.getenv('FIREBASE_SERVICE_ACCOUNT_B64', '') or '').strip()

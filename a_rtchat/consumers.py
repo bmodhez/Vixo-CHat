@@ -45,6 +45,9 @@ from .rate_limit import (
 
 from .moderation import moderate_message
 from .channels_utils import chatroom_channel_group_name
+from .mentions import extract_mention_usernames, resolve_mentioned_users
+from .models_read import ChatReadState
+from .models import Notification
 
 
 def _is_chat_blocked(user) -> bool:
@@ -92,6 +95,32 @@ class ChatroomConsumer(WebsocketConsumer):
         
         self.accept()
 
+        # Mark current messages as read on open (best-effort).
+        if getattr(self.user, 'is_authenticated', False):
+            try:
+                latest_id = int(
+                    GroupMessage.objects.filter(group=self.chatroom)
+                    .order_by('-id')
+                    .values_list('id', flat=True)
+                    .first()
+                    or 0
+                )
+                ChatReadState.objects.update_or_create(
+                    user=self.user,
+                    group=self.chatroom,
+                    defaults={'last_read_message_id': latest_id},
+                )
+                async_to_sync(self.channel_layer.group_send)(
+                    self.room_group_name,
+                    {
+                        'type': 'read_receipt_handler',
+                        'reader_id': getattr(self.user, 'id', None),
+                        'last_read_id': latest_id,
+                    },
+                )
+            except Exception:
+                pass
+
         # add and update online users
         if getattr(self.user, 'is_authenticated', False):
             if self.user not in self.chatroom.users_online.all():
@@ -124,6 +153,58 @@ class ChatroomConsumer(WebsocketConsumer):
             return
 
         event_type = (text_data_json.get('type') or '').strip().lower()
+
+        # Read receipts: client can send {type:'read', last_read_id: <int>}.
+        if event_type == 'read':
+            try:
+                last_read_id = int(text_data_json.get('last_read_id') or 0)
+            except Exception:
+                last_read_id = 0
+            if last_read_id <= 0:
+                return
+            try:
+                obj, _created = ChatReadState.objects.get_or_create(user=self.user, group=self.chatroom)
+                if last_read_id > int(getattr(obj, 'last_read_message_id', 0) or 0):
+                    obj.last_read_message_id = last_read_id
+                    obj.save(update_fields=['last_read_message_id', 'updated'])
+                async_to_sync(self.channel_layer.group_send)(
+                    self.room_group_name,
+                    {
+                        'type': 'read_receipt_handler',
+                        'reader_id': getattr(self.user, 'id', None),
+                        'last_read_id': last_read_id,
+                    },
+                )
+            except Exception:
+                pass
+            return
+
+        # After a limited number of messages, require verified email to continue sending.
+        # (Typing events are still allowed.)
+        if event_type != 'typing' and not getattr(self.user, 'is_staff', False):
+            try:
+                qs = getattr(self.user, 'emailaddress_set', None)
+                verified = bool(qs and qs.filter(verified=True).exists())
+            except Exception:
+                verified = False
+
+            if not verified:
+                try:
+                    limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 12))
+                    sent = GroupMessage.objects.filter(author=self.user).count()
+                except Exception:
+                    sent = 10**9
+                    limit = 12
+
+                if sent >= limit:
+                    try:
+                        self.send(text_data=json.dumps({
+                            'type': 'verify_required',
+                            'reason': 'Verify your email to continue chatting.',
+                        }))
+                    except Exception:
+                        pass
+                    return
 
         # Rate limit websocket event spam.
         if event_type == 'typing':
@@ -180,7 +261,7 @@ class ChatroomConsumer(WebsocketConsumer):
         pending_moderation = None
         if (
             body
-            and int(getattr(settings, 'AI_MODERATION_ENABLED', 1))
+            and int(getattr(settings, 'AI_MODERATION_ENABLED', 0))
             and not getattr(self.user, 'is_staff', False)
         ):
             try:
@@ -353,6 +434,69 @@ class ChatroomConsumer(WebsocketConsumer):
             reply_to=reply_to,
         )
 
+        # Mention notifications (per-user channel): @username
+        try:
+            usernames = extract_mention_usernames(body)
+            if usernames:
+                mentioned = resolve_mentioned_users(usernames)
+                member_ids = None
+                if getattr(self.chatroom, 'group_name', '') != 'public-chat':
+                    member_ids = set(self.chatroom.members.values_list('id', flat=True))
+
+                preview = (body or '')[:140]
+                for u in mentioned:
+                    if not getattr(u, 'id', None) or u.id == getattr(self.user, 'id', None):
+                        continue
+                    if member_ids is not None and u.id not in member_ids:
+                        continue
+
+                    # Persist notification only if the user is offline (not connected in any chat WS).
+                    try:
+                        from a_rtchat.notifications import should_persist_notification
+
+                        if should_persist_notification(
+                            user_id=u.id,
+                            chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
+                        ):
+                            Notification.objects.create(
+                                user=u,
+                                from_user=self.user,
+                                type='mention',
+                                chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
+                                message_id=message.id,
+                                preview=preview,
+                                url=f"/chat/room/{(getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name) }#msg-{message.id}",
+                            )
+                    except Exception:
+                        pass
+
+                    async_to_sync(self.channel_layer.group_send)(
+                        f"notify_user_{u.id}",
+                        {
+                            'type': 'mention_notify_handler',
+                            'from_username': getattr(self.user, 'username', '') or '',
+                            'chatroom_name': getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
+                            'message_id': message.id,
+                            'preview': preview,
+                        },
+                    )
+
+                    # Optional: push notification via FCM (offline / background)
+                    try:
+                        from a_users.tasks import send_mention_push_task
+
+                        send_mention_push_task.delay(
+                            u.id,
+                            from_username=getattr(self.user, 'username', '') or '',
+                            chatroom_name=getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name,
+                            preview=preview,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            # Best-effort: don't block message sends on notify issues
+            pass
+
         if pending_moderation:
             decision, action = pending_moderation
             ModerationEvent.objects.create(
@@ -381,6 +525,43 @@ class ChatroomConsumer(WebsocketConsumer):
             self.room_group_name, event
         )
 
+        # Reply notification (best-effort)
+        try:
+            if reply_to and getattr(reply_to, 'author_id', None) and reply_to.author_id != getattr(self.user, 'id', None):
+                target_id = int(reply_to.author_id)
+                room_name = getattr(self.chatroom, 'group_name', self.chatroom_name) or self.chatroom_name
+                preview = (body or '')[:140]
+
+                # Persist only if the user is not online in this chat.
+                try:
+                    from a_rtchat.notifications import should_persist_notification
+
+                    if should_persist_notification(user_id=target_id, chatroom_name=room_name):
+                        Notification.objects.create(
+                            user_id=target_id,
+                            from_user=self.user,
+                            type='reply',
+                            chatroom_name=room_name,
+                            message_id=message.id,
+                            preview=preview,
+                            url=f"/chat/room/{room_name}#msg-{message.id}",
+                        )
+                except Exception:
+                    pass
+
+                async_to_sync(self.channel_layer.group_send)(
+                    f"notify_user_{target_id}",
+                    {
+                        'type': 'reply_notify_handler',
+                        'from_username': getattr(self.user, 'username', '') or '',
+                        'chatroom_name': room_name,
+                        'message_id': message.id,
+                        'preview': preview,
+                    },
+                )
+        except Exception:
+            pass
+
     def typing_handler(self, event):
         if event.get('author_id') == getattr(self.user, 'id', None):
             return
@@ -398,17 +579,43 @@ class ChatroomConsumer(WebsocketConsumer):
         message_id = event['message_id']
         message = GroupMessage.objects.get(id=message_id)
         reaction_emojis = _reaction_context_for(message, self.user)
+
+        other_last_read_id = 0
+        if getattr(self.chatroom, 'is_private', False) and getattr(self.user, 'is_authenticated', False):
+            try:
+                other = self.chatroom.members.exclude(id=self.user.id).first()
+                if other:
+                    other_last_read_id = int(
+                        ChatReadState.objects.filter(user=other, group=self.chatroom)
+                        .values_list('last_read_message_id', flat=True)
+                        .first()
+                        or 0
+                    )
+            except Exception:
+                other_last_read_id = 0
+
         context = {
             'message': message,
             'user': self.user,
             'chat_group': self.chatroom,
             'reaction_emojis': reaction_emojis,
+            'other_last_read_id': other_last_read_id,
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
             'type': 'chat_message',
             'html': html,
         }))
+
+    def read_receipt_handler(self, event):
+        try:
+            self.send(text_data=json.dumps({
+                'type': 'read_receipt',
+                'reader_id': event.get('reader_id') or 0,
+                'last_read_id': event.get('last_read_id') or 0,
+            }))
+        except Exception:
+            return
 
 
     def message_update_handler(self, event):
@@ -419,11 +626,27 @@ class ChatroomConsumer(WebsocketConsumer):
         if not message:
             return
         reaction_emojis = _reaction_context_for(message, self.user)
+
+        other_last_read_id = 0
+        if getattr(self.chatroom, 'is_private', False) and getattr(self.user, 'is_authenticated', False):
+            try:
+                other = self.chatroom.members.exclude(id=self.user.id).first()
+                if other:
+                    other_last_read_id = int(
+                        ChatReadState.objects.filter(user=other, group=self.chatroom)
+                        .values_list('last_read_message_id', flat=True)
+                        .first()
+                        or 0
+                    )
+            except Exception:
+                other_last_read_id = 0
+
         context = {
             'message': message,
             'user': self.user,
             'chat_group': self.chatroom,
             'reaction_emojis': reaction_emojis,
+            'other_last_read_id': other_last_read_id,
         }
         html = render_to_string("a_rtchat/chat_message.html", context=context)
         self.send(text_data=json.dumps({
@@ -619,4 +842,30 @@ class NotificationsConsumer(WebsocketConsumer):
             'chatroom_name': event.get('chatroom_name') or '',
             'call_url': event.get('call_url') or '',
             'call_event_url': event.get('call_event_url') or '',
+        }))
+
+    def mention_notify_handler(self, event):
+        self.send(text_data=json.dumps({
+            'type': 'mention',
+            'from_username': event.get('from_username') or '',
+            'chatroom_name': event.get('chatroom_name') or '',
+            'message_id': event.get('message_id') or 0,
+            'preview': event.get('preview') or '',
+        }))
+
+    def reply_notify_handler(self, event):
+        self.send(text_data=json.dumps({
+            'type': 'reply',
+            'from_username': event.get('from_username') or '',
+            'chatroom_name': event.get('chatroom_name') or '',
+            'message_id': event.get('message_id') or 0,
+            'preview': event.get('preview') or '',
+        }))
+
+    def follow_notify_handler(self, event):
+        self.send(text_data=json.dumps({
+            'type': 'follow',
+            'from_username': event.get('from_username') or '',
+            'url': event.get('url') or '',
+            'preview': event.get('preview') or '',
         }))

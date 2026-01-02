@@ -16,11 +16,56 @@ from django.db.models import Q
 from django.db.models import Count
 from django.utils.http import url_has_allowed_host_and_scheme
 from a_users.models import Profile
+from a_users.models import FCMToken
 from .models import *
 from .forms import *
 from .agora import build_rtc_token
 from .moderation import moderate_message
 from .channels_utils import chatroom_channel_group_name
+from .mentions import extract_mention_usernames, resolve_mentioned_users
+
+
+@login_required
+def push_register(request):
+    """Register an FCM token for the current user."""
+    if request.method != 'POST':
+        raise Http404()
+
+    token = ''
+    try:
+        if request.content_type and 'application/json' in request.content_type:
+            payload = json.loads((request.body or b'{}').decode('utf-8'))
+            token = (payload.get('token') or '').strip()
+        else:
+            token = (request.POST.get('token') or '').strip()
+    except Exception:
+        token = (request.POST.get('token') or '').strip()
+
+    if not token or len(token) > 256:
+        return JsonResponse({'ok': False, 'error': 'invalid_token'}, status=400)
+
+    ua = (request.META.get('HTTP_USER_AGENT') or '')[:255]
+    obj, _created = FCMToken.objects.update_or_create(
+        token=token,
+        defaults={'user': request.user, 'user_agent': ua},
+    )
+    # If token existed but belonged to another user, move it.
+    if obj.user_id != request.user.id:
+        obj.user = request.user
+        obj.user_agent = ua
+        obj.save(update_fields=['user', 'user_agent', 'updated', 'last_seen'])
+
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def push_unregister(request):
+    if request.method != 'POST':
+        raise Http404()
+    token = (request.POST.get('token') or '').strip()
+    if token:
+        FCMToken.objects.filter(user=request.user, token=token).delete()
+    return JsonResponse({'ok': True})
 from .rate_limit import (
     check_rate_limit,
     get_muted_seconds,
@@ -81,6 +126,142 @@ def _is_chat_blocked(user) -> bool:
     except Exception:
         return False
 
+
+def _has_verified_email(user) -> bool:
+    """Return True if the user has a verified email (django-allauth).
+
+    Staff users are treated as verified.
+    """
+    try:
+        if not getattr(user, 'is_authenticated', False):
+            return False
+        if getattr(user, 'is_staff', False):
+            return True
+        qs = getattr(user, 'emailaddress_set', None)
+        if qs is None:
+            return False
+        return qs.filter(verified=True).exists()
+    except Exception:
+        return False
+
+
+def _requires_verified_email_for_chat(user) -> bool:
+    """Allow a small number of messages for unverified users, then require verification."""
+    try:
+        if not getattr(user, 'is_authenticated', False):
+            return True
+        if getattr(user, 'is_staff', False):
+            return False
+        if _has_verified_email(user):
+            return False
+
+        limit = int(getattr(settings, 'UNVERIFIED_CHAT_MESSAGE_LIMIT', 12))
+        sent = GroupMessage.objects.filter(author=user).count()
+        return sent >= limit
+    except Exception:
+        # Fail closed: don't allow sends if unsure.
+        return True
+
+
+def _groupchat_display_name(room) -> str:
+    return (getattr(room, 'groupchat_name', None) or getattr(room, 'group_name', '') or '').strip()
+
+
+def _build_groupchat_sections(groupchats):
+    """Split group chats into UI sections.
+
+    Matching is done by substring so existing emoji variants still group correctly.
+    """
+    sections_spec = [
+        (
+            '✨ Social & Fun',
+            ['Backbenchers', 'Vibe Check', 'Nalayak Gang', 'Girls Group', 'Late Night Owls'],
+        ),
+        (
+            '🤝 Professional & Indian Vibes',
+            ['Indian-Boys', 'The Nexus', 'Growth Mindset'],
+        ),
+        (
+            '🚀 Tech & Coding',
+            ['Code & Coffee', 'The Syntax Squad', 'Bug Hunters', 'FullStack Circle'],
+        ),
+    ]
+
+    bases_in_order = []
+    for _, bases in sections_spec:
+        bases_in_order.extend(bases)
+    base_to_rank = {b.lower(): i for i, b in enumerate(bases_in_order)}
+
+    assigned = set()
+    out_sections = []
+    for title, bases in sections_spec:
+        items = []
+        for room in groupchats:
+            if room.pk in assigned:
+                continue
+            name = _groupchat_display_name(room).lower()
+            matched_base = None
+            for base in bases:
+                if base.lower() in name:
+                    matched_base = base
+                    break
+            if matched_base:
+                assigned.add(room.pk)
+                items.append((base_to_rank.get(matched_base.lower(), 10_000), room))
+
+        items.sort(key=lambda t: t[0])
+        out_sections.append({'title': title, 'rooms': [r for _, r in items]})
+
+    remaining = [r for r in groupchats if r.pk not in assigned]
+    remaining.sort(key=lambda r: _groupchat_display_name(r).lower())
+    return out_sections, remaining
+
+
+@login_required
+def mention_user_search(request):
+    """Return a small list of users for @mention autocomplete.
+
+    Query param: q (without @)
+    Response: { results: [{username, display, avatar}] }
+    """
+    q = (request.GET.get('q') or '').strip()
+    if q.startswith('@'):
+        q = q[1:]
+
+    q = q[:32]
+    # Keep the query conservative to avoid weird regex/LIKE behavior.
+    allowed = []
+    for ch in q:
+        if ch.isalnum() or ch in {'_', '.', '-'}:
+            allowed.append(ch)
+    q = ''.join(allowed)
+
+    if not q:
+        return JsonResponse({'results': []})
+
+    qs = (
+        User.objects
+        .filter(is_active=True)
+        .filter(Q(username__istartswith=q) | Q(profile__displayname__istartswith=q))
+        .select_related('profile')
+        .order_by('username')
+    )[:8]
+
+    results = []
+    for u in qs:
+        try:
+            profile = getattr(u, 'profile', None)
+        except Exception:
+            profile = None
+        display = (getattr(profile, 'name', None) or u.username)
+        try:
+            avatar = getattr(profile, 'avatar', '') if profile else ''
+        except Exception:
+            avatar = ''
+        results.append({'username': u.username, 'display': display, 'avatar': avatar})
+
+    return JsonResponse({'results': results})
+
 @login_required
 def chat_view(request, chatroom_name='public-chat'):
     # Only auto-create the global public chat. All other rooms must already exist.
@@ -118,6 +299,20 @@ def chat_view(request, chatroom_name='public-chat'):
             if member != request.user:
                 other_user = member
                 break
+
+    other_last_read_id = 0
+    if other_user and getattr(chat_group, 'is_private', False):
+        try:
+            from .models import ChatReadState
+
+            other_last_read_id = int(
+                ChatReadState.objects.filter(user=other_user, group=chat_group)
+                .values_list('last_read_message_id', flat=True)
+                .first()
+                or 0
+            )
+        except Exception:
+            other_last_read_id = 0
             
     if chat_group.groupchat_name:
         if request.user not in chat_group.members.all():
@@ -153,6 +348,16 @@ def chat_view(request, chatroom_name='public-chat'):
     if request.htmx:
         if chat_blocked:
             return HttpResponse('', status=403)
+
+        # Unverified users can send a limited number of messages, then must verify.
+        if _requires_verified_email_for_chat(request.user):
+            messages.warning(request, 'Verify your email to continue chatting.')
+            resp = HttpResponse(
+                '<div class="text-xs text-red-400">Verify your email to continue chatting.</div>',
+                status=403,
+            )
+            resp.headers['HX-Refresh'] = 'true'
+            return resp
 
         if chat_muted_seconds > 0:
             resp = HttpResponse('', status=429)
@@ -217,8 +422,69 @@ def chat_view(request, chatroom_name='public-chat'):
                 group=chat_group,
             )
 
-            # Broadcast to others; sender will render via HTMX response.
             channel_layer = get_channel_layer()
+
+            # Mention notifications from caption (best-effort)
+            try:
+                usernames = extract_mention_usernames(caption or '')
+                if usernames:
+                    mentioned = resolve_mentioned_users(usernames)
+                    member_ids = None
+                    if getattr(chat_group, 'group_name', '') != 'public-chat':
+                        member_ids = set(chat_group.members.values_list('id', flat=True))
+                    preview = (caption or message.filename or '')[:140]
+                    for u in mentioned:
+                        if not getattr(u, 'id', None) or u.id == request.user.id:
+                            continue
+                        if member_ids is not None and u.id not in member_ids:
+                            continue
+
+                        # Persist only if user is not online in this chat.
+                        try:
+                            from a_rtchat.notifications import should_persist_notification
+
+                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name):
+                                Notification.objects.create(
+                                    user=u,
+                                    from_user=request.user,
+                                    type='mention',
+                                    chatroom_name=chat_group.group_name,
+                                    message_id=message.id,
+                                    preview=preview,
+                                    url=f"/chat/room/{chat_group.group_name}#msg-{message.id}",
+                                )
+                        except Exception:
+                            pass
+
+                        async_to_sync(channel_layer.group_send)(
+                            f"notify_user_{u.id}",
+                            {
+                                'type': 'mention_notify_handler',
+                                'from_username': request.user.username,
+                                'chatroom_name': chat_group.group_name,
+                                'message_id': message.id,
+                                'preview': preview,
+                            },
+                        )
+
+                        # Optional: push notification via FCM (offline / background)
+                        try:
+                            from a_users.tasks import send_mention_push_task
+
+                            send_mention_push_task.delay(
+                                u.id,
+                                from_username=request.user.username,
+                                chatroom_name=chat_group.group_name,
+                                preview=preview,
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Reply notification (caption upload doesn't support reply_to)
+
+            # Broadcast to others; sender will render via HTMX response.
             async_to_sync(channel_layer.group_send)(
                 chatroom_channel_group_name(chat_group),
                 {
@@ -235,6 +501,7 @@ def chat_view(request, chatroom_name='public-chat'):
                 'user': request.user,
                 'chat_group': chat_group,
                 'reaction_emojis': CHAT_REACTION_EMOJIS,
+                'other_last_read_id': other_last_read_id,
             }).content.decode('utf-8')
 
             resp = HttpResponse(html, status=200)
@@ -375,102 +642,103 @@ def chat_view(request, chatroom_name='public-chat'):
             return resp
 
         # AI moderation (Gemini): run after cheap anti-spam checks but before saving.
+        # Default is OFF for performance unless explicitly enabled.
         pending_moderation = None
-        if raw_body and int(getattr(settings, 'AI_MODERATION_ENABLED', 1)):
-                last_user_msgs = list(
-                    chat_group.chat_messages.filter(author=request.user)
-                    .exclude(body__isnull=True)
-                    .exclude(body='')
-                    .order_by('-created')
-                    .values_list('body', flat=True)[:3]
+        if raw_body and int(getattr(settings, 'AI_MODERATION_ENABLED', 0)):
+            last_user_msgs = list(
+                chat_group.chat_messages.filter(author=request.user)
+                .exclude(body__isnull=True)
+                .exclude(body='')
+                .order_by('-created')
+                .values_list('body', flat=True)[:3]
+            )
+            last_room_msgs = list(
+                chat_group.chat_messages
+                .exclude(body__isnull=True)
+                .exclude(body='')
+                .order_by('-created')
+                .values_list('body', flat=True)[:3]
+            )
+
+            ctx = {
+                'room': chat_group.group_name,
+                'is_private': bool(getattr(chat_group, 'is_private', False)),
+                'user_id': request.user.id,
+                'username': request.user.username,
+                'typed_ms': typed_ms,
+                'ip': get_client_ip(request),
+                'recent_user_messages': list(reversed(last_user_msgs)),
+                'recent_room_messages': list(reversed(last_room_msgs)),
+            }
+            decision = moderate_message(text=raw_body, context=ctx)
+
+            # Decide action
+            min_block_sev = int(getattr(settings, 'AI_BLOCK_MIN_SEVERITY', 3))
+            min_flag_sev = int(getattr(settings, 'AI_FLAG_MIN_SEVERITY', 1))
+            action = decision.action
+            if decision.severity >= min_block_sev:
+                action = 'block'
+            elif decision.severity >= min_flag_sev and action == 'allow' and decision.categories:
+                action = 'flag'
+
+            log_all = bool(int(getattr(settings, 'AI_LOG_ALL', 0)))
+            # For allow/flag we prefer to attach the moderation record to the saved message.
+            if log_all or action == 'flag':
+                pending_moderation = (decision, action)
+
+            if action == 'block':
+                ModerationEvent.objects.create(
+                    user=request.user,
+                    room=chat_group,
+                    message=None,
+                    text=raw_body[:2000],
+                    action='block',
+                    categories=decision.categories,
+                    severity=decision.severity,
+                    confidence=decision.confidence,
+                    reason=decision.reason,
+                    source='gemini',
+                    meta={
+                        'model_action': decision.action,
+                        'suggested_mute_seconds': decision.suggested_mute_seconds,
+                    },
                 )
-                last_room_msgs = list(
-                    chat_group.chat_messages
-                    .exclude(body__isnull=True)
-                    .exclude(body='')
-                    .order_by('-created')
-                    .values_list('body', flat=True)[:3]
+
+                # Repeat offender tracking: severity adds weight.
+                weight = 1 + int(decision.severity >= 2)
+                _, auto_muted = record_abuse_violation(
+                    scope='ai_block',
+                    user_id=request.user.id,
+                    room=chat_group.group_name,
+                    window_seconds=int(getattr(settings, 'AI_ABUSE_WINDOW', 24 * 60 * 60)),
+                    threshold=int(getattr(settings, 'AI_STRIKE_THRESHOLD', 3)),
+                    mute_seconds=int(getattr(settings, 'AI_AUTO_MUTE_SECONDS', 5 * 60)),
+                    weight=weight,
                 )
+                suggested = int(decision.suggested_mute_seconds or 0)
+                if suggested > 0:
+                    set_muted(request.user.id, suggested)
+                    auto_muted = max(auto_muted, suggested)
 
-                ctx = {
-                    'room': chat_group.group_name,
-                    'is_private': bool(getattr(chat_group, 'is_private', False)),
-                    'user_id': request.user.id,
-                    'username': request.user.username,
-                    'typed_ms': typed_ms,
-                    'ip': get_client_ip(request),
-                    'recent_user_messages': list(reversed(last_user_msgs)),
-                    'recent_room_messages': list(reversed(last_room_msgs)),
-                }
-                decision = moderate_message(text=raw_body, context=ctx)
+                resp = HttpResponse('', status=429 if auto_muted else 403)
+                if auto_muted:
+                    resp.headers['Retry-After'] = str(auto_muted)
+                # HTMX event for UI feedback
+                reason = (decision.reason or 'Message blocked by moderation.')
+                resp.headers['HX-Trigger'] = json.dumps({'moderationBlocked': {'reason': reason}})
+                return resp
 
-                # Decide action
-                min_block_sev = int(getattr(settings, 'AI_BLOCK_MIN_SEVERITY', 3))
-                min_flag_sev = int(getattr(settings, 'AI_FLAG_MIN_SEVERITY', 1))
-                action = decision.action
-                if decision.severity >= min_block_sev:
-                    action = 'block'
-                elif decision.severity >= min_flag_sev and action == 'allow' and decision.categories:
-                    action = 'flag'
-
-                log_all = bool(int(getattr(settings, 'AI_LOG_ALL', 0)))
-                # For allow/flag we prefer to attach the moderation record to the saved message.
-                if log_all or action == 'flag':
-                    pending_moderation = (decision, action)
-
-                if action == 'block':
-                    ModerationEvent.objects.create(
-                        user=request.user,
-                        room=chat_group,
-                        message=None,
-                        text=raw_body[:2000],
-                        action='block',
-                        categories=decision.categories,
-                        severity=decision.severity,
-                        confidence=decision.confidence,
-                        reason=decision.reason,
-                        source='gemini',
-                        meta={
-                            'model_action': decision.action,
-                            'suggested_mute_seconds': decision.suggested_mute_seconds,
-                        },
-                    )
-
-                    # Repeat offender tracking: severity adds weight.
-                    weight = 1 + int(decision.severity >= 2)
-                    _, auto_muted = record_abuse_violation(
-                        scope='ai_block',
-                        user_id=request.user.id,
-                        room=chat_group.group_name,
-                        window_seconds=int(getattr(settings, 'AI_ABUSE_WINDOW', 24 * 60 * 60)),
-                        threshold=int(getattr(settings, 'AI_STRIKE_THRESHOLD', 3)),
-                        mute_seconds=int(getattr(settings, 'AI_AUTO_MUTE_SECONDS', 5 * 60)),
-                        weight=weight,
-                    )
-                    suggested = int(decision.suggested_mute_seconds or 0)
-                    if suggested > 0:
-                        set_muted(request.user.id, suggested)
-                        auto_muted = max(auto_muted, suggested)
-
-                    resp = HttpResponse('', status=429 if auto_muted else 403)
-                    if auto_muted:
-                        resp.headers['Retry-After'] = str(auto_muted)
-                    # HTMX event for UI feedback
-                    reason = (decision.reason or 'Message blocked by moderation.')
-                    resp.headers['HX-Trigger'] = json.dumps({'moderationBlocked': {'reason': reason}})
-                    return resp
-
-                if action == 'flag':
-                    # Flagging does not block, but increases strike weight slightly.
-                    record_abuse_violation(
-                        scope='ai_flag',
-                        user_id=request.user.id,
-                        room=chat_group.group_name,
-                        window_seconds=int(getattr(settings, 'AI_ABUSE_WINDOW', 24 * 60 * 60)),
-                        threshold=int(getattr(settings, 'AI_STRIKE_THRESHOLD', 3)),
-                        mute_seconds=int(getattr(settings, 'AI_AUTO_MUTE_SECONDS', 5 * 60)),
-                        weight=1,
-                    )
+            if action == 'flag':
+                # Flagging does not block, but increases strike weight slightly.
+                record_abuse_violation(
+                    scope='ai_flag',
+                    user_id=request.user.id,
+                    room=chat_group.group_name,
+                    window_seconds=int(getattr(settings, 'AI_ABUSE_WINDOW', 24 * 60 * 60)),
+                    threshold=int(getattr(settings, 'AI_STRIKE_THRESHOLD', 3)),
+                    mute_seconds=int(getattr(settings, 'AI_AUTO_MUTE_SECONDS', 5 * 60)),
+                    weight=1,
+                )
 
         form = ChatmessageCreateForm(request.POST)
         if form.is_valid(): # Fix: Added brackets ()
@@ -489,6 +757,103 @@ def chat_view(request, chatroom_name='public-chat'):
                     if reply_to:
                         message.reply_to = reply_to
             message.save()
+
+            channel_layer = get_channel_layer()
+
+            # Mention notifications (best-effort)
+            try:
+                usernames = extract_mention_usernames(raw_body or '')
+                if usernames:
+                    mentioned = resolve_mentioned_users(usernames)
+                    member_ids = None
+                    if getattr(chat_group, 'group_name', '') != 'public-chat':
+                        member_ids = set(chat_group.members.values_list('id', flat=True))
+
+                    preview = (raw_body or '')[:140]
+                    for u in mentioned:
+                        if not getattr(u, 'id', None) or u.id == request.user.id:
+                            continue
+                        if member_ids is not None and u.id not in member_ids:
+                            continue
+
+                        # Persist notification only if user is offline (not connected in any chat WS).
+                        try:
+                            from a_rtchat.notifications import should_persist_notification
+
+                            if should_persist_notification(user_id=u.id, chatroom_name=chat_group.group_name):
+                                Notification.objects.create(
+                                    user=u,
+                                    from_user=request.user,
+                                    type='mention',
+                                    chatroom_name=chat_group.group_name,
+                                    message_id=message.id,
+                                    preview=preview,
+                                    url=f"/chat/room/{chat_group.group_name}#msg-{message.id}",
+                                )
+                        except Exception:
+                            pass
+
+                        async_to_sync(channel_layer.group_send)(
+                            f"notify_user_{u.id}",
+                            {
+                                'type': 'mention_notify_handler',
+                                'from_username': request.user.username,
+                                'chatroom_name': chat_group.group_name,
+                                'message_id': message.id,
+                                'preview': preview,
+                            },
+                        )
+
+                        # Optional: push notification via FCM (offline / background)
+                        try:
+                            from a_users.tasks import send_mention_push_task
+
+                            send_mention_push_task.delay(
+                                u.id,
+                                from_username=request.user.username,
+                                chatroom_name=chat_group.group_name,
+                                preview=preview,
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Reply notification (best-effort)
+            try:
+                reply_to = getattr(message, 'reply_to', None)
+                if reply_to and getattr(reply_to, 'author_id', None) and reply_to.author_id != request.user.id:
+                    target_id = int(reply_to.author_id)
+                    preview = (raw_body or '')[:140]
+
+                    try:
+                        from a_rtchat.notifications import should_persist_notification
+
+                        if should_persist_notification(user_id=target_id, chatroom_name=chat_group.group_name):
+                            Notification.objects.create(
+                                user_id=target_id,
+                                from_user=request.user,
+                                type='reply',
+                                chatroom_name=chat_group.group_name,
+                                message_id=message.id,
+                                preview=preview,
+                                url=f"/chat/room/{chat_group.group_name}#msg-{message.id}",
+                            )
+                    except Exception:
+                        pass
+
+                    async_to_sync(channel_layer.group_send)(
+                        f"notify_user_{target_id}",
+                        {
+                            'type': 'reply_notify_handler',
+                            'from_username': request.user.username,
+                            'chatroom_name': chat_group.group_name,
+                            'message_id': message.id,
+                            'preview': preview,
+                        },
+                    )
+            except Exception:
+                pass
 
             if pending_moderation:
                 decision, action = pending_moderation
@@ -524,16 +889,35 @@ def chat_view(request, chatroom_name='public-chat'):
         # Invalid (e.g., empty/whitespace) message -> do nothing
         return HttpResponse('', status=204)
     
+    sidebar_groupchats_qs = (
+        ChatGroup.objects
+        .filter(groupchat_name__isnull=False)
+        .exclude(group_name='online-status')
+        .order_by('groupchat_name')
+    )
+    sidebar_groupchats = list(sidebar_groupchats_qs)
+    sidebar_groupchat_sections, sidebar_groupchats_remaining = _build_groupchat_sections(sidebar_groupchats)
+
+    needs_email_verification_for_chat = False
+    try:
+        needs_email_verification_for_chat = _requires_verified_email_for_chat(request.user)
+    except Exception:
+        needs_email_verification_for_chat = False
+
     context = {
         'chat_messages' : chat_messages, 
         'form' : form,
         'other_user' : other_user,
+        'other_last_read_id': other_last_read_id,
         'chatroom_name' : chatroom_name,
         'chat_group' : chat_group,
         'chat_blocked': chat_blocked,
         'chat_muted_seconds': chat_muted_seconds,
+        'needs_email_verification_for_chat': needs_email_verification_for_chat,
         # Show all group chats so admin-created rooms appear in UI even before the user joins.
-        'sidebar_groupchats': ChatGroup.objects.filter(groupchat_name__isnull=False).exclude(group_name='online-status').order_by('groupchat_name'),
+        'sidebar_groupchats': sidebar_groupchats,
+        'sidebar_groupchat_sections': sidebar_groupchat_sections,
+        'sidebar_groupchats_remaining': sidebar_groupchats_remaining,
         'sidebar_privatechats': [] if chat_blocked else request.user.chat_groups.filter(is_private=True, is_code_room=False).exclude(group_name='online-status'),
         'sidebar_code_rooms': [] if chat_blocked else request.user.chat_groups.filter(is_private=True, is_code_room=True).exclude(group_name='online-status'),
         'private_room_create_form': PrivateRoomCreateForm(),
@@ -834,6 +1218,7 @@ def chat_file_upload(request, chatroom_name):
             'user': request.user,
             'chat_group': chat_group,
             'reaction_emojis': CHAT_REACTION_EMOJIS,
+            'other_last_read_id': 0,
         }).content.decode('utf-8')
         response = HttpResponse(html, status=200)
         # Fire after swap so client-side reset doesn't interfere with the DOM insertion.
@@ -1272,7 +1657,7 @@ def call_invite_view(request, chatroom_name):
     call_url = reverse('chat-call', kwargs={'chatroom_name': chat_group.group_name}) + f"?type={call_type}&role=callee"
     call_event_url = reverse('chat-call-event', kwargs={'chatroom_name': chat_group.group_name})
     for member in chat_group.members.exclude(id=request.user.id):
-        async_to_sync(channel_layer.group_send)(
+                        async_to_sync(channel_layer.group_send)(
             f"notify_user_{member.id}",
             {
                 'type': 'call_invite_notify_handler',
@@ -1285,7 +1670,6 @@ def call_invite_view(request, chatroom_name):
         )
 
     return JsonResponse({'ok': True})
-
 
 @login_required
 def call_presence_view(request, chatroom_name):

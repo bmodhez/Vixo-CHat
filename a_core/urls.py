@@ -3,9 +3,11 @@ from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
 from django.views.static import serve as static_serve
+from a_core.firebase_views import firebase_messaging_sw
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('firebase-messaging-sw.js', firebase_messaging_sw, name='firebase-messaging-sw'),
     path('', include('a_rtchat.urls')),
     path('accounts/', include('allauth.urls')),
     path('profile/', include('a_users.urls')),
