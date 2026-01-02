@@ -3,13 +3,18 @@ import os
 from urllib.parse import urlparse
 import dj_database_url
 
+
+# Detect Render platform early (used to pick safer defaults)
+IS_RENDER = bool((os.environ.get('RENDER_EXTERNAL_URL') or '').strip() or (os.environ.get('RENDER') or '').strip())
+
 # Optional: load local .env (keeps secrets out of code)
 try:
     import environ
 
     env = environ.Env()
     _env_path = Path(__file__).resolve().parent.parent / '.env'
-    if _env_path.exists():
+    # Do not load project .env on Render; use Render Dashboard env vars instead.
+    if (not IS_RENDER) and _env_path.exists():
         environ.Env.read_env(str(_env_path))
 except Exception:
     # If django-environ isn't installed or .env missing, fall back to normal os.environ
@@ -36,7 +41,7 @@ def _origin_from_url(url: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
+ENVIRONMENT = (os.environ.get("ENVIRONMENT") or ("production" if IS_RENDER else "development")).strip().lower()
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get(
@@ -457,6 +462,11 @@ ACCOUNT_EMAIL_UNKNOWN_ACCOUNTS = True
 
 # Ensure confirmation links use the correct protocol.
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if (ENVIRONMENT == 'production' or _using_devtunnel) else 'http'
+
+# Allauth adapter override:
+# - Prevents SMTP/network errors from crashing signup/password-reset views.
+ACCOUNT_ADAPTER = 'a_users.allauth_adapter.CustomAccountAdapter'
+ALLAUTH_FAIL_EMAIL_SILENTLY = _env_bool('ALLAUTH_FAIL_EMAIL_SILENTLY', default=IS_RENDER)
 
 # Allauth: use custom styled forms (Tailwind classes)
 ACCOUNT_FORMS = {
