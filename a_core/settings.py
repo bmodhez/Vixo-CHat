@@ -80,9 +80,10 @@ _use_cloudinary_media = bool(USE_CLOUDINARY_MEDIA and _cloudinary_creds_present)
 
 # Django 4.2+ storage configuration
 # Media (uploads): Cloudinary when enabled, else local filesystem.
-# Static: unchanged (Whitenoise in production).
+# Static: In production, use Whitenoise compression WITHOUT manifest hashing.
+# This prevents runtime 500s if a referenced static file wasn't collected.
 _static_backend = (
-    'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    'whitenoise.storage.CompressedStaticFilesStorage'
     if ENVIRONMENT == 'production'
     else 'django.contrib.staticfiles.storage.StaticFilesStorage'
 )
@@ -100,12 +101,7 @@ STORAGES = {
     },
 }
 
-# Whitenoise Manifest strict mode can crash pages at runtime if any template
-# references a static file that wasn't collected (e.g. when Render build cache
-# is stale or collectstatic didn't run). Disable strictness in production so the
-# app stays up; missing assets will 404 instead of causing a 500.
-if ENVIRONMENT == 'production':
-    WHITENOISE_MANIFEST_STRICT = False
+
 
 ALLOWED_HOSTS = [
     "localhost",
